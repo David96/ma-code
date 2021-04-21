@@ -1,46 +1,65 @@
 include("BoostFactorOptimizer.jl")
+include("FileUtils.jl")
 
 using .BoostFactorOptimizer
+using BoostFractor
+using Dates
+using DelimitedFiles
 using PyPlot
 
-freq_center = 20e9
+# %%
+
+freq_center = 21e9
 freq_width= 50e6
 
 epsilon = 24
 n_disk = 20
 n_region = 2 * n_disk + 2
 
-c_0 = 2.99792458e8
-#init_spacing = c_0 / freq_center / 2
-#init_spacing = 0.007118 + (0.007118 - 0.008069)*(freq_center * 1e-9 - 22.288)
-init_spacing = 0.008069
-
-function distances_from_spacing(init_spacing)
-    distance = Array{Float64}([i==1 ? 0 : i%2==0 ? init_spacing : 1e-3 for i=1:n_region])
-    distance[end] = 0
-    return distance
+init_spacing = 0
+if isfile("results/init_$(freq_center).txt")
+    init_spacing = read_init_spacing_from_file("results/init_$freq_center.txt")
+    println("Loaded init spacing from file: $init_spacing")
 end
 
 freq_range = (freq_center - 0.5e9):0.004e9:(freq_center + 0.5e9)
 eps = Array{Complex{Float64}}([i==1 ? 1e20 : i%2==0 ? 1 : epsilon for i=1:n_region])
-distance = distances_from_spacing(init_spacing)
+distance = distances_from_spacing(init_spacing, n_region)
 optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq_center, freq_width, freq_range,
                               distance, eps)
 
+println(distance)
+
+if init_spacing == 0
+    best_spacing = 0
+    best_boost = 0
+    for i in 0.001:0.000001:0.01
+        global best_boost, best_spacing
+        optim_params.sbdry_init.distance = distances_from_spacing(i)
+
+        boost_factor = abs2(transformer(optim_params.sbdry_init, optim_params.coords,
+                                         optim_params.modes, prop=propagator1D,
+                                         reflect=nothing, f=freq_center,
+                                         diskR=optim_params.diskR)[1])
+        if boost_factor > best_boost
+            best_boost = boost_factor
+            best_spacing = i
+        end
+    end
+    println("Found resonant config at $best_spacing")
+    write_init_spacing_to_file(best_spacing, freq_center)
+    update_distances(optim_params, distances_from_spacing(best_spacing))
+end
+
+# %%
+
 spacings = @time optimize_spacings(optim_params, 0)
 
-#best_cost = 1000
-#best = 0
-#for i in 0.007:0.000001:0.009
-#    global best, best_cost
-#    cost = BoostFactorOptimizer.cost_fun_equidistant(optim_params)(i)
-#    if cost < best_cost
-#        println("Current best cost: $cost")
-#        best_cost = cost
-#        best = i
-#    end
-#end
-#println("Best cost: $best_cost at $best")
+# %%
+println("Writing spacings to file: $(spacings .+ init_spacing)")
+# init_spacing has to be added here because spacings are relative to it and we don't wanna care
+# about that when loading the spacings
+write_optim_spacing_to_file(spacings .+ init_spacing, freq_center)
 
 eout = calc_eout(optim_params, spacings)
 

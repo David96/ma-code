@@ -4,7 +4,19 @@ using BoostFractor, LineSearches, ForwardDiff, Optim, Base.Threads
 
 include("transformer_optim_utilities.jl") # Bunch of helper functions
 
-export init_optimizer, optimize_spacings, calc_eout
+export init_optimizer, optimize_spacings, calc_eout, BoosterParams, update_freq_center,
+        update_distances, distances_from_spacing
+
+
+function distances_from_spacing(init_spacing::Float64, n_region::Int)
+    distance = Array{Float64}([i==1 ? 0 : i%2==0 ? init_spacing : 1e-3 for i=1:n_region])
+    distance[end] = 0
+    return distance
+end
+
+function distances_from_spacing(init_spacing::Vector{Float64})
+    vcat(0, reduce(vcat, [spacing, 1e-3] for spacing in init_spacing), 0)
+end
 
 mutable struct BoosterParams
     n_disk::Int
@@ -55,13 +67,18 @@ function update_freq_center(params::BoosterParams, center::Float64)
     update_itp_sub(params)
 end
 
+function update_distances(params::BoosterParams, distances::Vector)
+    params.sbdry_init.distance = distances
+    update_itp_sub(params)
+end
+
 function cost_fun(p::BoosterParams, fixed_disk)
     return x -> begin
         # if one disk is fixed, insert it into dist_shift as the optimizer then runs on one
         # dimension less but we still need the "full" list of disks
         if fixed_disk > 0
             # it's important to *copy* and not modify x here otherwise the optimizer gets confused
-            x = vcat(x[1:fixed_disk - 1], 0, x[fixed_disk:length(x)])
+            x = vcat(x[1:fixed_disk - 1], -sum(x[1:fixed_disk - 1]), x[fixed_disk:length(x)])
         end
 
         calc_boostfactor_cost(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords,
@@ -77,7 +94,7 @@ function cost_fun_equidistant(p::BoosterParams)
     end
 end
 
-algorithm = BFGS(linesearch = BackTracking(order=3))
+algorithm = BFGS(linesearch = BackTracking(order=2))
 options = Optim.Options(f_tol = 1e-6)
 
 function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zeros(p.n_disk))
@@ -107,7 +124,7 @@ end
 function calc_eout(p::BoosterParams, spacings; fixed_disk=0)
     dist = copy(spacings)
     if fixed_disk > 0
-        insert!(dist, fixed_disk, 0)
+        insert!(dist, fixed_disk, -sum(dist[1:fixed_disk-1]))
     end
     sbdry_optim = copy_setup_boundaries(p.sbdry_init, p.coords)
     sbdry_optim.distance[2:2:end-2] .+= dist
