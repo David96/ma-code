@@ -5,7 +5,7 @@ using BoostFractor, LineSearches, ForwardDiff, Optim, Base.Threads
 include("transformer_optim_utilities.jl") # Bunch of helper functions
 
 export init_optimizer, optimize_spacings, calc_eout, BoosterParams, update_freq_center,
-        update_distances, distances_from_spacing
+        update_distances, distances_from_spacing, cost_fun, calc_real_bf_cost
 
 
 function distances_from_spacing(init_spacing::Float64, n_region::Int)
@@ -54,17 +54,21 @@ function init_optimizer(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_wi
     return p
 end
 
-function update_itp_sub(p::BoosterParams)
-    spacing_grid = (-2500:50:2500)*1e-6
+function update_itp_sub(p::BoosterParams; range=-2500:50:2500)
+    spacing_grid = (range)*1e-6
     prop_matrix_grid_sub = calc_propagation_matrices_grid(p.sbdry_init, p.coords, p.modes,
                                                           spacing_grid, p.freq_optim,
                                                           diskR=p.diskR, prop=propagator1D)
     p.itp_sub = construct_prop_matrix_interpolation(prop_matrix_grid_sub, spacing_grid)
 end
 
-function update_freq_center(params::BoosterParams, center::Float64)
+function update_freq_center(params::BoosterParams, center::Float64; small_range=false)
     params.freq_optim = get_freq_optim(center, params.freq_width)
-    update_itp_sub(params)
+    if small_range
+        update_itp_sub(params, range=-50:50:50)
+    else
+        update_itp_sub(params)
+    end
 end
 
 function update_distances(params::BoosterParams, distances::Vector)
@@ -77,8 +81,14 @@ function cost_fun(p::BoosterParams, fixed_disk)
         # if one disk is fixed, insert it into dist_shift as the optimizer then runs on one
         # dimension less but we still need the "full" list of disks
         if fixed_disk > 0
+            rel_pos = -sum(x[1:fixed_disk - 1])
+            if -rel_pos >= p.sbdry_init.distance[2 * fixed_disk]
+                #println("Damn: $rel_pos vs $(p.sbdry_init.distance)")
+                return (-rel_pos) - p.sbdry_init.distance[2 * fixed_disk]
+            end
             # it's important to *copy* and not modify x here otherwise the optimizer gets confused
-            x = vcat(x[1:fixed_disk - 1], -sum(x[1:fixed_disk - 1]), x[fixed_disk:length(x)])
+            x = vcat(x[1:fixed_disk - 1], rel_pos, x[fixed_disk:length(x)])
+
         end
 
         calc_boostfactor_cost(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords,
@@ -94,6 +104,8 @@ function cost_fun_equidistant(p::BoosterParams)
     end
 end
 
+algorithms = [BFGS(linesearch = BackTracking(order=2)), LBFGS(linesearch = BackTracking(order=2)),
+              GradientDescent(linesearch = BackTracking(order=2)), NelderMead()]
 algorithm = BFGS(linesearch = BackTracking(order=2))
 options = Optim.Options(f_tol = 1e-6)
 
@@ -108,6 +120,22 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zer
         # Convergence very much depends on a good start point.
         x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .* 100e-6
         od = OnceDifferentiable(cost_function, x_0, autodiff=:forward)
+        #results = Vector()
+        #costs = Vector{Float64}(undef, length(algorithms))
+        #for (j, algorithm) in enumerate(algorithms)
+        #    if i == 4
+        #        res = optimize(cost_function, x_0, algorithm, options)
+        #    else
+        #        res = optimize(od, x_0, algorithm, options)
+        #    end
+        #    push!(results, res)
+        #    costs[j] = cost_function(Optim.minimizer(res))
+        #    println("[$i] Optimizer $j: $(costs[j])")
+        #end
+        #cost = minimum(costs)
+        #winner = indexin(cost, costs)[1]
+        #res = results[winner]
+        #println("[$i] Optimizer $winner wins with cost $(cost)!")
         res = optimize(od, x_0, algorithm, options)
         cost = cost_function(Optim.minimizer(res))
         lock(lk)
@@ -121,13 +149,28 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zer
     spacings
 end
 
+spacings_with_fd(spacings, fd) = vcat(spacings[1:fd - 1],
+                                      -sum(spacings[1:fd - 1]),
+                                      spacings[fd:end])
+
+function calc_real_bf_cost(p::BoosterParams, spacings; fixed_disk=0)
+    p1 = deepcopy(p)
+    p1.freq_range = p1.freq_optim
+    eout = calc_eout(p1, spacings, fixed_disk=fixed_disk)
+    pwr = abs2.(sum(conj.(eout[1,:,:]) .* p.m_reflect, dims=1)[1,:])
+    -minimum(pwr)
+end
+
 function calc_eout(p::BoosterParams, spacings; fixed_disk=0)
-    dist = copy(spacings)
     if fixed_disk > 0
-        insert!(dist, fixed_disk, -sum(dist[1:fixed_disk-1]))
+        spacings = spacings_with_fd(spacings, fixed_disk)
     end
     sbdry_optim = copy_setup_boundaries(p.sbdry_init, p.coords)
-    sbdry_optim.distance[2:2:end-2] .+= dist
+    sbdry_optim.distance[2:2:end-2] .+= spacings
+    if count(x -> x < 0, sbdry_optim.distance) > 0
+        println("We fucked, that's not possible!")
+        throw(ArgumentError("Negative relative spacings aren't possible!"))
+    end
 
     #Calculate prop matrix grid at a dist shift of zero of optimized setup
     prop_matrix_grid_plot = calc_propagation_matrices_grid(sbdry_optim, p.coords, p.modes, 0,

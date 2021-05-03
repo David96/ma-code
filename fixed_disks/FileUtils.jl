@@ -1,6 +1,14 @@
 using DelimitedFiles
 using Dates
 
+function get_current_version(file)
+    i = 1
+    while isfile("$(file)_v$i.txt")
+        i += 1
+    end
+    return "v$i"
+end
+
 function write_init_spacing_to_file(data, freq)
     open("results/init_$freq.txt", "w") do io
         write(io, "$data")
@@ -8,8 +16,8 @@ function write_init_spacing_to_file(data, freq)
 end
 
 function write_optim_spacing_to_file(data, freq)
-    date = Dates.format(now(), "yyyy-mm-ddTHH:MM")
-    open("results/optim_$(freq)_$date.txt", "w") do io
+    v = get_current_version("results/optim_$(freq)")
+    open("results/optim_$(freq)_$v.txt", "w") do io
         writedlm(io, data, ',')
     end
 end

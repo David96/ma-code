@@ -9,14 +9,14 @@ using PyPlot
 
 # %%
 
-freq_center = 21e9
+freq_center = 22e9
 freq_width= 50e6
 
 epsilon = 24
 n_disk = 20
 n_region = 2 * n_disk + 2
 
-init_spacing = 0
+init_spacing = 0.0
 if isfile("results/init_$(freq_center).txt")
     init_spacing = read_init_spacing_from_file("results/init_$freq_center.txt")
     println("Loaded init spacing from file: $init_spacing")
@@ -28,14 +28,12 @@ distance = distances_from_spacing(init_spacing, n_region)
 optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq_center, freq_width, freq_range,
                               distance, eps)
 
-println(distance)
-
 if init_spacing == 0
     best_spacing = 0
     best_boost = 0
     for i in 0.001:0.000001:0.01
         global best_boost, best_spacing
-        optim_params.sbdry_init.distance = distances_from_spacing(i)
+        optim_params.sbdry_init.distance = distances_from_spacing(i, n_region)
 
         boost_factor = abs2(transformer(optim_params.sbdry_init, optim_params.coords,
                                          optim_params.modes, prop=propagator1D,
