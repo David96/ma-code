@@ -1,63 +1,67 @@
-include("BoostFactorOptimizer.jl")
-include("FileUtils.jl")
+using Distributed, ClusterManagers
 
-using .BoostFactorOptimizer
-using BoostFractor
-using PyPlot
+addprocs(SlurmManager(21), partition="maxwell", t="01:30:00")
 
-# %%
+@everywhere begin
+    include("BoostFactorOptimizer.jl")
+    include("FileUtils.jl")
 
-freq_center = 22e9
-freq_width = 50e6
-freq_shift = 50e6
+    using BoostFractor
+    using PyPlot
 
-epsilon = 24
-n_disk = 20
-n_region = 2 * n_disk + 2
+    # %%
 
-freq_0_spacing = read_optim_spacing_from_file("results/optim_2.2e10_2021-04-26.txt")
+    freq_center = 22e9
+    freq_width = 50e6
+    freq_shift = 50e6
 
-println("Loaded spacings from file: $freq_0_spacing")
+    epsilon = 24
+    n_disk = 20
+    n_region = 2 * n_disk + 2
 
-freq_range = (freq_center - 0.5e9):0.004e9:(freq_center + 0.5e9)
-eps = Array{Complex{Float64}}([i==1 ? 1e20 : i%2==0 ? 1 : epsilon for i=1:n_region])
-distance = distances_from_spacing(freq_0_spacing)
-optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq_center, freq_width,
-                              freq_range, distance, eps)
-#eout_0 = calc_eout(optim_params, zeros(n_disk))[1, 1, :]
-#
-#plot(freq_range .* 1e-9, abs2.(eout_0))
+    freq_0_spacing = read_optim_spacing_from_file("results/optim_2.2e10_2021-04-26.txt")
 
-# %%
+    println("Loaded spacings from file: $freq_0_spacing")
 
-spacings = Vector{Vector}(undef, n_disk + 1)
-eout = Vector{Vector}(undef, n_disk + 1)
-for i in 0:n_disk
-    spacings[i + 1] = read_optim_spacing_from_file("results/optim_2.2e10+1.1e9_f$(i)_2021-04-26.txt")
+    freq_range = (freq_center - 0.5e9):0.004e9:(freq_center + 0.5e9)
+    eps = Array{Complex{Float64}}([i==1 ? 1e20 : i%2==0 ? 1 : epsilon for i=1:n_region])
+    distance = distances_from_spacing(freq_0_spacing)
+    optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq_center, freq_width,
+                                  freq_range, distance, eps)
+    #eout_0 = calc_eout(optim_params, zeros(n_disk))[1, 1, :]
+    #
+    #plot(freq_range .* 1e-9, abs2.(eout_0))
+    min_shift = -1500e6
 end
-for shift in 1150e6:50e6:1300e6
-    if shift == 0
-        continue
+
+# %%
+
+#for i in 0:n_disk
+#    spacings[i + 1] = read_optim_spacing_from_file("results/optim_2.2e10+1.1e9_f$(i)_2021-04-26.txt")
+#end
+
+@everywhere function optimize_for(p, fd, shift, s0)
+    p = deepcopy(p)
+    update_freq_center(p, freq_center + shift)
+    spacing = @time optimize_spacings(p, fd, starting_point=s0)
+    s = shift > 0 ? "+$(shift)" : "$(shift)"
+    write_optim_spacing_to_file(spacing, "$freq_center$(s)_f$fd")
+end
+
+shift = parse(Float64, ARGS[1])
+remotes = Vector{Future}(undef, n_disk + 1)
+for fd in 0:n_disk
+    if abs(shift) != -50e6
+        shift_before = shift < 0 ? "$(shift + 50e6)" : "+$(shift - 50e6)"
+        s0 = read_optim_spacing_from_file("results/optim_$(freq_center)$(shift_before)_f$(fd)_v1.txt")
+    else
+        s0 = zeros(n_disk - (fd == 0 ? 0 : 1))
     end
-    update_freq_center(optim_params, freq_center + shift)
-
-    for i in 0:n_disk
-        println("Optimizing for fixed disk $i at $(freq_center + shift)")
-
-        starting_point = nothing
-        if shift == 50e6
-            starting_point = zeros(n_disk - 1)
-        else
-            # spacings still contains the spacings of the last shift
-            starting_point = spacings[i + 1]
-        end
-        println("Starting point: $starting_point")
-        spacings[i + 1] = @time optimize_spacings(optim_params, i,
-                                                  starting_point=starting_point)
-        eout[i + 1] = calc_eout(optim_params, spacings[i + 1], fixed_disk=i)[1, 1, :]
-
-        write_optim_spacing_to_file(spacings[i + 1], "$freq_center+$(shift)_f$i")
-    end
+    remotes[fd + 1] = @spawnat (fd + 2) optimize_for(optim_params, fd, shift, s0)
+    println("Spawned worker $(fd)…")
+end
+for remote in remotes
+    fetch(remote)
 end
 
 # %%

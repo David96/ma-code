@@ -1,11 +1,6 @@
-module BoostFactorOptimizer
-
 using BoostFractor, LineSearches, ForwardDiff, Optim, Base.Threads
 
 include("transformer_optim_utilities.jl") # Bunch of helper functions
-
-export init_optimizer, optimize_spacings, calc_eout, BoosterParams, update_freq_center,
-        update_distances, distances_from_spacing, cost_fun, calc_real_bf_cost
 
 
 function distances_from_spacing(init_spacing::Float64, n_region::Int)
@@ -115,7 +110,7 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zer
     cost_function = cost_fun(p, fixed_disk)
     lk = SpinLock()
     # Run initial optimization a few times and pick the best one
-    @threads for i in 1:128
+    @threads for i in 1:256
         # Add some random variation to start spacing.
         # Convergence very much depends on a good start point.
         x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .* 100e-6
@@ -180,6 +175,4 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0)
                         f = 1:length(p.freq_range)]
     calc_boostfactor_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrix_plot,
                            diskR=p.diskR, prop=propagator1D)
-end
-
 end
