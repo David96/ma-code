@@ -148,15 +148,19 @@ spacings_with_fd(spacings, fd) = vcat(spacings[1:fd - 1],
                                       -sum(spacings[1:fd - 1]),
                                       spacings[fd:end])
 
-function calc_real_bf_cost(p::BoosterParams, spacings; fixed_disk=0)
+function calc_real_bf_cost(p::BoosterParams, spacings; fixed_disk=0, area=true)
     p1 = deepcopy(p)
     p1.freq_range = p1.freq_optim
     eout = calc_eout(p1, spacings, fixed_disk=fixed_disk)
     pwr = abs2.(sum(conj.(eout[1,:,:]) .* p.m_reflect, dims=1)[1,:])
-    -minimum(pwr)
+    if area
+        sum(pwr) * p1.freq_range.step
+    else
+        -minimum(pwr)
+    end
 end
 
-function calc_eout(p::BoosterParams, spacings; fixed_disk=0)
+function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false)
     if fixed_disk > 0
         spacings = spacings_with_fd(spacings, fixed_disk)
     end
@@ -173,6 +177,11 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0)
                                                            prop=propagator1D)
     prop_matrix_plot = [prop_matrix_grid_plot[r,f,1,1,1,:,:] for r = 1:(2 * p.n_disk + 2),
                         f = 1:length(p.freq_range)]
-    calc_boostfactor_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrix_plot,
-                           diskR=p.diskR, prop=propagator1D)
+    if reflect
+        calc_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrix_plot, p.m_reflect,
+                   diskR=p.diskR, prop=propagator1D)
+    else
+        calc_boostfactor_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrix_plot,
+                               diskR=p.diskR, prop=propagator1D)
+    end
 end

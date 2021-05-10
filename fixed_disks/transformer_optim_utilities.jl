@@ -96,14 +96,19 @@ end;
 Calculates boostfactor for given frequencies and booster. Note that the distances in sbdry are meaningless since
 propagation_matrices_set already contains the effect of spacings.
 """        
-function calc_boostfactor_modes(sbdry,coords,modes, frequencies, prop_matrices_set::Array{Array{Complex{T},2},2}; diskR=0.15,prop=propagator) where T<:Real
+function calc_boostfactor_modes(sbdry,coords,modes, frequencies, prop_matrices_set::Array{Array{Complex{T},2},2}; diskR=0.15,prop=propagator,reflect=nothing) where T<:Real
     n_freq = length(frequencies)
     n_modes = size(prop_matrices_set[1,1])[1]
-    EoutModes0 = Array{Complex{T},3}(undef,1,n_modes,n_freq)
+    EoutModes0 = Array{Complex{T},3}(undef,reflect === nothing ? 1 : 2, n_modes, n_freq)
     # Sweep over frequency
     Threads.@threads for f in 1:n_freq
-        boost = transformer(sbdry,coords,modes; prop=prop,diskR=diskR,f=frequencies[f],propagation_matrices=prop_matrices_set[:,f],reflect=nothing)
-        EoutModes0[1,:,f] =  boost
+        boost, refl = transformer(sbdry,coords,modes; prop=prop,diskR=diskR,f=frequencies[f],
+                            propagation_matrices=prop_matrices_set[:,f],
+                            reflect=reflect)
+        EoutModes0[1,:,f] = boost
+        if reflect !== nothing
+            EoutModes0[2,:,f] = refl
+        end
     end
     return EoutModes0
 end;

@@ -1,6 +1,7 @@
 include("FileUtils.jl")
 include("BoostFactorOptimizer.jl")
 
+using BoostFractor
 using PyPlot
 
 #freq = ARGS[1]
@@ -31,7 +32,7 @@ init_spacings = read_optim_spacing_from_file("results/optim_$(freq)_2021-04-26.t
 
 distances = distances_from_spacing(init_spacings)
 
-optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq_center, 0, freq_range,
+optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq_center, 50e6, freq_range,
                               distances, eps)
 
 # %%
@@ -111,7 +112,7 @@ function plot_disk_positions(disk_rel_pos::Vector{Float64}, ax)
     ax.set_xlabel("Disk")
 end
 
-function plot_bf_quality(fixed_disks, shift_range)
+function plot_bf_quality(fixed_disks, shift_range; area=true)
     qualities = Vector{Vector}(undef, length(fixed_disks))
     legend_text = Vector{String}(undef, length(fixed_disks))
     for (i, fd) in enumerate(fixed_disks)
@@ -127,20 +128,109 @@ function plot_bf_quality(fixed_disks, shift_range)
                 s = shift_text(shift)
                 optim_spacings = read_optim_spacing_from_file("results/optim_$freq$(s)_f$(fixed_disk)_$version.txt")
                 optim_spacings_0 = read_optim_spacing_from_file("results/optim_$freq$(s)_f0_$version.txt")
-                cost_0 = calc_real_bf_cost(optim_params, optim_spacings_0)
-                cost = calc_real_bf_cost(optim_params, optim_spacings, fixed_disk = fixed_disk)
+                cost_0 = calc_real_bf_cost(optim_params, optim_spacings_0, area=area)
+                cost = calc_real_bf_cost(optim_params, optim_spacings, fixed_disk = fixed_disk, area=area)
                 push!(qualities[i], cost / cost_0)
             end
         end
     end
-    println(qualities)
+    #println(qualities)
     for quality in qualities
         plot(shift_range .* 1e-6, quality)
     end
     legend(legend_text, bbox_to_anchor=(1.01, 1.01))
     xlabel("Frequency shift [MHz]")
     ylabel("Boostfactor quality")
-    ylim(0.9, 1.01)
+    ylim(0.8, 1.01)
 end
 
+function plot_trace_back(fixed_disk, freq, shift)
+    optim_spacings = read_optim_spacing_from_file("results/optim_$(freq)$(shift_text(shift))_f$(fixed_disk)_$version.txt")
+    optim_spacings = spacings_with_fd(optim_spacings, fixed_disk)
+    bdry = copy_setup_boundaries(optim_params.sbdry_init, optim_params.coords)
+    bdry.distance[2:2:end-2] .+= optim_spacings
+    p = deepcopy(optim_params)
+    p.freq_range = freq
+    # set fixed_disk to 0 here as we already inserted the missing distance
+    refl = calc_eout(p, optim_spacings, fixed_disk=0, reflect=true)[1][1]
+    full_fields = BoostFractor.transformer_trace_back(refl, p.m_reflect, bdry, p.coords, p.modes,
+                                         prop=propagator1D, f=freq)
+    plot_1d_field_pattern(-autorotate(full_fields[:,:,1]), bdry, freq)
+end
+
+"""
+    Plot the fields inside the system for a 1D calculation
+"""
+function plot_1d_field_pattern(full_solution_regions, bdry::SetupBoundaries, f; fill=false,
+    add_ea=false, overallphase=1)
+    # Iterate over regions and plot the result in each region
+    ztot = 0 # Each region needs to know where it starts, so iteratively add up the lengths of regions
+    Nregions = length(bdry.eps)
+    for s in 1:Nregions
+        # Propagation constant in that region
+        c=299792458
+        kreg = 2pi/c*f
+        kreg *= sqrt(bdry.eps[s])
+
+        # Define the color of that region according to mirror / disk / free space / ...
+        fillcolor = nothing
+        if abs.(bdry.eps[s]) > 100 || bdry.eps[s] == NaN
+            fillcolor = "darkorange"
+        elseif abs.(bdry.eps[s]) != 1
+            fillcolor = "lightgray"
+        end
+
+        # Plot that region
+        plot_region_1d(full_solution_regions[s,1].*overallphase, full_solution_regions[s,2].*overallphase,
+                        ztot, ztot+bdry.distance[s],
+                        kreg,
+                        Ea=(add_ea ? (1/bdry.eps[s]).*overallphase : 0),
+                        maxE=2.2*maximum(abs.(full_solution_regions[:,:])),
+                        bgcolor=fillcolor, extraspace=(s == Nregions),fill=fill,)
+
+        ztot += bdry.distance[s]
+    end
+
+    # Add annotations to plot
+    xlabel("z [m]")
+    ylabel("\$E/E_0\$")
+
+    legend(loc="lower right")
+end
+
+"""
+    Plot the fields inside one region for a 1D calculation
+"""
+function plot_region_1d(R, L, z0, z1, k; bgcolor=nothing, extraspace=false,fill=false, Ea=0,maxE=10)    
+    # Construct the relative coordinate system for that region
+    z1 += 1e-9
+    maximum = (z1+(extraspace ? 10e-3 : 0))
+    z = vcat(z0:2e-4:maximum, maximum)
+    dz = z .- z0
+    dz2 = .-(z .- z1)
+
+    # Calculate the functional solution for the region
+    Rf = L*exp.(+1im.*k.*dz2)
+    Lf = R*exp.(-1im.*k.*dz2)
+
+    #Plot
+
+    # Mark the Region as Disk / Mirror / Air / etc.
+    if bgcolor !== nothing
+        fill_between([z0 == 0 ? -0.0025 : z0,z1], -maxE, maxE, color=bgcolor, linewidth=0)
+    end
+
+    # Plot the real and imaginary part of the solution
+    plot(z, real.(Rf.+Lf.+ Ea), c="b", label=(extraspace ? "Re(E)" : ""))
+    plot(z, imag.(Rf.+Lf.+ Ea), c="r", label=(extraspace ? "Im(E)" : ""))
+end
+
+"""
+    Rotate the solution such that the fields inside are real
+"""
+function autorotate(full_solution_regions)
+    ang = angle.(full_solution_regions[2,1].+full_solution_regions[2,2])
+    #sgn = real.((full_solution_regions[2,1].+full_solution_regions[2,2]).*exp(-1im*ang)) .> 0
+    return full_solution_regions.*exp(-1im*ang)
+end
 #show()
