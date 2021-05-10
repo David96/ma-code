@@ -49,20 +49,18 @@ end
 end
 
 shift = parse(Float64, ARGS[1])
-remotes = Vector{Future}(undef, n_disk + 1)
-for fd in 0:n_disk
-    if abs(shift) != -50e6
+@sync for fd in 0:n_disk
+    if abs(shift) != 50e6
         shift_before = shift < 0 ? "$(shift + 50e6)" : "+$(shift - 50e6)"
         s0 = read_optim_spacing_from_file("results/optim_$(freq_center)$(shift_before)_f$(fd)_v1.txt")
     else
         s0 = zeros(n_disk - (fd == 0 ? 0 : 1))
     end
-    remotes[fd + 1] = @spawnat (fd + 2) optimize_for(optim_params, fd, shift, s0)
+    @spawnat (fd + 2) optimize_for(optim_params, fd, shift, s0)
     println("Spawned worker $(fd)…")
 end
-for remote in remotes
-    fetch(remote)
-end
+
+println("All good, we done")
 
 # %%
 
