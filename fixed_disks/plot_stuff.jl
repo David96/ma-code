@@ -55,7 +55,7 @@ function plot_boostfactor(shift, fixed_disk, ax)
     if shift < 0
         p.freq_range = (freq_center + shift - 100e6):0.004e9:(freq_center + 100e6)
     else
-        p.freq_range = (freq_center - 100e6):0004e9:(freq_center + shift + 100e6)
+        p.freq_range = (freq_center - 100e6):0.004e9:(freq_center + shift + 100e6)
     end
     eout_0 = calc_eout(p, zeros(n_disk))[1, 1, :]
     ax.plot(p.freq_range .* 1e-9, abs2.(eout_0))
@@ -146,7 +146,9 @@ end
 
 function plot_trace_back(fixed_disk, freq, shift)
     optim_spacings = read_optim_spacing_from_file("results/optim_$(freq)$(shift_text(shift))_f$(fixed_disk)_$version.txt")
-    optim_spacings = spacings_with_fd(optim_spacings, fixed_disk)
+    if fixed_disk != 0
+        optim_spacings = spacings_with_fd(optim_spacings, fixed_disk)
+    end
     bdry = copy_setup_boundaries(optim_params.sbdry_init, optim_params.coords)
     bdry.distance[2:2:end-2] .+= optim_spacings
     p = deepcopy(optim_params)
@@ -155,6 +157,7 @@ function plot_trace_back(fixed_disk, freq, shift)
     refl = calc_eout(p, optim_spacings, fixed_disk=0, reflect=true)[1][1]
     full_fields = BoostFractor.transformer_trace_back(refl, p.m_reflect, bdry, p.coords, p.modes,
                                          prop=propagator1D, f=freq)
+    figure().set_size_inches(15, 12)
     plot_1d_field_pattern(-autorotate(full_fields[:,:,1]), bdry, freq)
 end
 
