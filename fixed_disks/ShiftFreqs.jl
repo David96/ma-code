@@ -1,13 +1,12 @@
 using Distributed, ClusterManagers
 
-addprocs(SlurmManager(21), partition="maxwell", t="01:30:00")
+addprocs(SlurmManager(21), partition="maxwell", t="01:30:00", nodes="2-6")
 
 @everywhere begin
     include("BoostFactorOptimizer.jl")
     include("FileUtils.jl")
 
     using BoostFractor
-    using PyPlot
 
     # %%
 
