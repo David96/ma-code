@@ -14,7 +14,7 @@ freq = "2.2e10"
 shift = "5.0e7"
 version = "v1"
 
-println("Plotting for $freq with shift $shift, v$version")
+println("Plotting for $freq with shift $shift, $version")
 
 if shift[1] != '+' && shift[1] != '-'
     shift = "+$shift"
@@ -62,15 +62,17 @@ function plot_boostfactor(shift, fixed_disk, ax)
 
     optim_spacings = read_optim_spacing_from_file(
                       "results/optim_$freq$(shift_text(shift))_f$(fixed_disk)_$version.txt")
-    ax.legend(["\$f_0\$", "Free"])
     if fixed_disk > 0
         optim_spacings_0 = read_optim_spacing_from_file(
-                            "results/optim_$freq$(shift_text(shift))_f0_$version.txt")
-        ax.plot(p.freq_range .* 1e-9, abs2.(calc_eout(p, optim_spacings_0)[1, 1, :]))
-        ax.legend(["\$f_0\$", "Free", "Fixed disk $fixed_disk"])
+                            "results/optim_$(parse(Float64, freq) + shift)_v1.txt")
+        update_distances(p, distances_from_spacing(optim_spacings_0),
+                         update_itp = false)
+        ax.plot(p.freq_range .* 1e-9, abs2.(calc_eout(p, zeros(n_disk))[1, 1, :]))
+        update_distances(p, distances, update_itp=false)
     end
     ax.plot(p.freq_range .* 1e-9,
          abs2.(calc_eout(p, optim_spacings, fixed_disk = fixed_disk)[1, 1, :]))
+    ax.legend(["\$f_0\$", "Free", "Fixed disk $fixed_disk"])
 
     ax.set_ylabel("Boostfactor")
     ax.set_xlabel("Frequency [GHz]")
@@ -120,28 +122,45 @@ function plot_bf_quality(fixed_disks, shift_range; area=true)
         legend_text[i] = "Fixed disk $fd"
     end
     for shift in shift_range
-        update_freq_center(optim_params, parse(Float64, freq) + shift)
+        update_freq_center(optim_params, parse(Float64, freq) + shift, update_itp = false)
+        optim_spacings_0 = read_optim_spacing_from_file(
+                            "results/optim_$(parse(Float64, freq) + shift)_v1.txt")
+        update_distances(optim_params, distances_from_spacing(optim_spacings_0),
+                         update_itp = false)
+        cost_0 = calc_real_bf_cost(optim_params, zeros(n_disk), fixed_disk=0, area=area)
+        update_distances(optim_params, distances, update_itp=false)
         for (i, fixed_disk) in enumerate(fixed_disks)
             if shift == 0
                 push!(qualities[i], 1.)
             else
                 s = shift_text(shift)
-                optim_spacings = read_optim_spacing_from_file("results/optim_$freq$(s)_f$(fixed_disk)_$version.txt")
-                optim_spacings_0 = read_optim_spacing_from_file("results/optim_$freq$(s)_f0_$version.txt")
-                cost_0 = calc_real_bf_cost(optim_params, optim_spacings_0, area=area)
-                cost = calc_real_bf_cost(optim_params, optim_spacings, fixed_disk = fixed_disk, area=area)
-                push!(qualities[i], cost / cost_0)
+                optim_spacings = read_optim_spacing_from_file(
+                                    "results/optim_$freq$(s)_f$(fixed_disk)_$version.txt")
+                try
+                    cost = calc_real_bf_cost(optim_params, optim_spacings, fixed_disk = fixed_disk,
+                                             area=area)
+                    push!(qualities[i], cost / cost_0)
+                catch e
+                    println("Shift $s, fd $fixed_disk failed: ", e)
+                end
             end
         end
     end
+    figure().set_size_inches(10, 8)
+    ax = subplot(1, 1, 1)
     #println(qualities)
     for quality in qualities
-        plot(shift_range .* 1e-6, quality)
+        ax.plot(shift_range .* 1e-9, quality)
     end
-    legend(legend_text, bbox_to_anchor=(1.01, 1.01))
-    xlabel("Frequency shift [MHz]")
-    ylabel("Boostfactor quality")
-    ylim(0.8, 1.01)
+    ax.legend(legend_text, bbox_to_anchor=(1.01, 1.01))
+    ax.set_xlabel("Frequency shift [GHz]")
+    ax.set_ylabel("Boostfactor quality")
+    ax.set_xticks(-2.5:0.5:2.5)
+    ax.set_xticks(-2.5:0.05:2.5, minor=true)
+    #grid(xdata=shift_range .* 1e-6, ydata=0.65:0.05:1.15)
+    ax.grid(which="minor", alpha=0.2)
+    ax.grid(which="major", alpha=0.5)
+    ax.set_ylim(0.65, 1.05)
 end
 
 function plot_trace_back(fixed_disk, freq, shift)

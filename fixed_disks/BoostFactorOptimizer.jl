@@ -57,18 +57,23 @@ function update_itp_sub(p::BoosterParams; range=-2500:50:2500)
     p.itp_sub = construct_prop_matrix_interpolation(prop_matrix_grid_sub, spacing_grid)
 end
 
-function update_freq_center(params::BoosterParams, center::Float64; small_range=false)
+function update_freq_center(params::BoosterParams, center::Float64; update_itp=true)
     params.freq_optim = get_freq_optim(center, params.freq_width)
-    if small_range
-        update_itp_sub(params, range=-50:50:50)
-    else
+    if update_itp
         update_itp_sub(params)
     end
 end
 
-function update_distances(params::BoosterParams, distances::Vector)
+function update_distances(params::BoosterParams, distances::Vector; update_itp=true)
     params.sbdry_init.distance = distances
-    update_itp_sub(params)
+    if update_itp
+        update_itp_sub(params)
+    end
+end
+
+function get_distance(a::Int, b::Int, p::BoosterParams, spacings)
+    return a < b ? sum(p.sbdry_init.distance[2a + 1:2b]) + sum(spacings[a + 1:b]) :
+                   sum(p.sbdry_init.distance[2b + 1:2a]) + sum(spacings[b + 1:a])
 end
 
 function cost_fun(p::BoosterParams, fixed_disk)
@@ -77,6 +82,7 @@ function cost_fun(p::BoosterParams, fixed_disk)
         # dimension less but we still need the "full" list of disks
         if fixed_disk > 0
             rel_pos = -sum(x[1:fixed_disk - 1])
+            # make sure disks don't move past each other
             if -rel_pos >= p.sbdry_init.distance[2 * fixed_disk]
                 #println("Damn: $rel_pos vs $(p.sbdry_init.distance)")
                 return (-rel_pos) - p.sbdry_init.distance[2 * fixed_disk]
@@ -84,6 +90,14 @@ function cost_fun(p::BoosterParams, fixed_disk)
             # it's important to *copy* and not modify x here otherwise the optimizer gets confused
             x = vcat(x[1:fixed_disk - 1], rel_pos, x[fixed_disk:length(x)])
 
+            # Disks are additionally constraint because every 8th disk is on the same rail.
+            # Disks on the same rail have a minimum distance of 64mm
+            for d = 1:p.n_disk - 8
+                dist = get_distance(d, d + 8, p, x)
+                if dist < 64e-3
+                    return 64e-3 - dist
+                end
+            end
         end
 
         calc_boostfactor_cost(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords,
@@ -166,9 +180,19 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false)
     end
     sbdry_optim = copy_setup_boundaries(p.sbdry_init, p.coords)
     sbdry_optim.distance[2:2:end-2] .+= spacings
+
+    # check that disks didn't move past each other
     if count(x -> x < 0, sbdry_optim.distance) > 0
         println("We fucked, that's not possible!")
         throw(ArgumentError("Negative relative spacings aren't possible!"))
+    end
+
+    # check that disks on the same rail are at least 64mm apart
+    for d = 1:p.n_disk - 8
+        dist = get_distance(d, d + 8, p, spacings)
+        if dist < 64e-3
+            throw(ArgumentError("Spacings not possible, disks on same rail to close"))
+        end
     end
 
     #Calculate prop matrix grid at a dist shift of zero of optimized setup
