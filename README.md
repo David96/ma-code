@@ -15,7 +15,7 @@ Used to find spacings with all disks being free. Runs in two stages:
 Currently the frequencies for which the spacings should be found have to be manually changed in the for loop. Afterwards 
 it can simply be run from the command line.
 
-## freq_scan.jl
+## ShiftFreqs.jl
 
 Takes a frequency as the parameter for which it optimizes the spacing with one disk fixed (runs for every disk).
 
