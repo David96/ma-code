@@ -1,6 +1,6 @@
 # Code for my master thesis
 
-## Usage
+## Usage (fixed_disks)
 
 ## InitialSpacings.jl
 
