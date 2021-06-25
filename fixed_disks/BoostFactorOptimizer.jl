@@ -13,6 +13,13 @@ function distances_from_spacing(init_spacing::Vector{Float64})
     vcat(0, reduce(vcat, [spacing, 1e-3] for spacing in init_spacing), 0)
 end
 
+# The distances are measured from disk_a-left to disk_b-left
+struct BoosterConstraints
+    min_dist_2_disks::Float64
+    min_dist_8_disks::Float64
+    max_dist_all_disks::Float64
+end
+
 mutable struct BoosterParams
     n_disk::Int
     epsilon::Float64
@@ -28,12 +35,13 @@ mutable struct BoosterParams
     modes
     m_reflect
     itp_sub
+    constraints::BoosterConstraints
 end
 
 get_freq_optim(center, width) = range(center - width / 2, stop=center + width / 2, length=8)
 
 function init_optimizer(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_width, freq_range,
-                        distance, eps)
+        distance, eps; constraints=BoosterConstraints(6e-3, 48e-3, 304e-3))
     freq_optim = get_freq_optim(freq_center, freq_width)
     coords = SeedCoordinateSystem(X = [1e-9], Y = [1e-9])
     n_regions = 2 * n_disk + 2
@@ -44,7 +52,7 @@ function init_optimizer(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_wi
     m_reflect = zeros(Mmax * (2 * Lmax + 1))
     m_reflect[Lmax + 1] = 1.0
     p = BoosterParams(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_width, freq_optim,
-                      freq_range, coords, sbdry_init, modes, m_reflect, nothing)
+                      freq_range, coords, sbdry_init, modes, m_reflect, nothing, constraints)
     update_itp_sub(p)
     return p
 end
@@ -72,12 +80,50 @@ function update_distances(params::BoosterParams, distances::Vector; update_itp=t
 end
 
 function get_distance(a::Int, b::Int, p::BoosterParams, spacings)
-    return a < b ? sum(p.sbdry_init.distance[2a + 1:2b]) + sum(spacings[a + 1:b]) :
-                   sum(p.sbdry_init.distance[2b + 1:2a]) + sum(spacings[b + 1:a])
+    return a < b ? (sum(p.sbdry_init.distance[2a + 1:2b]) + sum(spacings[a + 1:b])) :
+                   (sum(p.sbdry_init.distance[2b + 1:2a]) + sum(spacings[b + 1:a]))
+end
+
+function get_penalty(disk1, disk2, p, x, dist; is_min_dist=true)
+    dist_rel = is_min_dist ? (get_distance(disk1, disk2, p, x) - dist) :
+                             (dist - get_distance(disk1, disk2, p, x))
+    #println("Distance between: $disk1 and $disk2: $(get_distance(disk1, disk2, p, x))")
+    if dist_rel < 0
+        return Inf
+    elseif dist_rel < 1e-3
+        return (dist_rel * 1e3) ^ 6
+    end
+    return 0
+end
+
+function apply_constraints(p::BoosterParams, x)
+    penalty = 0.
+    # Disks are additionally constraint because every 8th disk is on the same rail.
+    # Also, two disks have a minimum distance and the booster has a fixed length
+    for d = 1:(p.n_disk - 1)
+        p1 = d <= p.n_disk - 8 ?
+                get_penalty(d, d + 8, p, x, p.constraints.min_dist_8_disks) : 0
+        p2 = get_penalty(d, d + 1, p, x, p.constraints.min_dist_2_disks)
+        #println("Applying penalty of $(p1 + p2)")
+        if p1 == Inf || p2 == Inf
+            return Inf
+        else
+            penalty += p1 + p2
+        end
+    end
+    p_length = get_penalty(1, p.n_disk, p, x, p.constraints.max_dist_all_disks,
+                           is_min_dist=false)
+    if p_length == Inf
+        return Inf
+    else
+        penalty += p_length
+    end
+    return penalty
 end
 
 function cost_fun(p::BoosterParams, fixed_disk)
     return x -> begin
+        penalty = 0.
         # if one disk is fixed, insert it into dist_shift as the optimizer then runs on one
         # dimension less but we still need the "full" list of disks
         if fixed_disk > 0
@@ -89,19 +135,15 @@ function cost_fun(p::BoosterParams, fixed_disk)
             end
             # it's important to *copy* and not modify x here otherwise the optimizer gets confused
             x = vcat(x[1:fixed_disk - 1], rel_pos, x[fixed_disk:length(x)])
+        end
 
-            # Disks are additionally constraint because every 8th disk is on the same rail.
-            # Disks on the same rail have a minimum distance of 64mm
-            for d = 1:p.n_disk - 8
-                dist = get_distance(d, d + 8, p, x)
-                if dist < 64e-3
-                    return 64e-3 - dist
-                end
-            end
+        penalty = apply_constraints(p, x)
+        if penalty == Inf
+            return 1000.
         end
 
         calc_boostfactor_cost(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords,
-                              p.modes, p.m_reflect, diskR=p.diskR, prop=propagator1D)
+                              p.modes, p.m_reflect, diskR=p.diskR, prop=propagator1D) + penalty
     end
 end
 
@@ -124,7 +166,7 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zer
     cost_function = cost_fun(p, fixed_disk)
     lk = SpinLock()
     # Run initial optimization a few times and pick the best one
-    @threads for i in 1:256
+    @threads for i in 1:1024
         # Add some random variation to start spacing.
         # Convergence very much depends on a good start point.
         x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .* 100e-6
@@ -163,12 +205,19 @@ spacings_with_fd(spacings, fd) = vcat(spacings[1:fd - 1],
                                       spacings[fd:end])
 
 function calc_real_bf_cost(p::BoosterParams, spacings; fixed_disk=0, area=true)
+    if fixed_disk > 0
+        spacings = spacings_with_fd(spacings, fixed_disk)
+    end
+    penalty = apply_constraints(p, spacings)
+    if penalty == Inf
+        return 1000
+    end
     p1 = deepcopy(p)
     p1.freq_range = p1.freq_optim
-    eout = calc_eout(p1, spacings, fixed_disk=fixed_disk)
+    eout = calc_eout(p1, spacings, fixed_disk=0)
     pwr = abs2.(sum(conj.(eout[1,:,:]) .* p.m_reflect, dims=1)[1,:])
     if area
-        sum(pwr) * p1.freq_range.step
+        -sum(pwr) * p1.freq_range.step
     else
         -minimum(pwr)
     end
@@ -187,12 +236,8 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false)
         throw(ArgumentError("Negative relative spacings aren't possible!"))
     end
 
-    # check that disks on the same rail are at least 64mm apart
-    for d = 1:p.n_disk - 8
-        dist = get_distance(d, d + 8, p, spacings)
-        if dist < 64e-3
-            throw(ArgumentError("Spacings not possible, disks on same rail to close"))
-        end
+    if apply_constraints(p, spacings) == Inf
+        throw(ArgumentError("Spacings don't fullfill constraints!"))
     end
 
     #Calculate prop matrix grid at a dist shift of zero of optimized setup
