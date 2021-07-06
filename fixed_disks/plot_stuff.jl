@@ -170,6 +170,31 @@ function plot_bf_quality(fixed_disks, shift_range; area=true)
     ax.set_ylim(0.55, 1.10)
 end
 
+function plot_modes(freq, mmax, lmax)
+    freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9)
+    distance = distances_from_spacing(read_optim_spacing_from_file("results/optim_$(freq)_v1.txt"))
+    p_1d = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, 50e6, freq_range,
+                          distance, eps)
+    p_3d = init_optimizer(n_disk, epsilon, 0.15, mmax, lmax, freq, 50e6, freq_range,
+                          distance, eps, three_dims=true)
+
+    eout_3d = calc_eout(p_3d, zeros(n_disk))
+    eout_1d = calc_eout(p_1d, zeros(n_disk))
+
+    area_1d = sum(abs2.(eout_1d[1, 1, :])) * p_1d.freq_range.step
+    area_3d_m1 = sum(abs2.(eout_3d[1, 1, :])) * p_3d.freq_range.step
+
+    println("Area m=1 / area 1D = $(Float64(area_3d_m1 / area_1d))")
+
+    plot(freq_range .* 1e-9, abs2.(eout_1d[1, 1, :]))
+    l = ["1D"]
+    for m in 1:mmax
+        plot(freq_range .* 1e-9, abs2.(eout_3d[1, m, :]))
+        push!(l, "M = $m")
+    end
+    legend(l)
+end
+
 function plot_trace_back(fixed_disk, freq, shift)
     if fixed_disk == 0 && shift == 0
         optim_spacings = read_optim_spacing_from_file("results/optim_$(freq)_$version.txt")
