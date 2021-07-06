@@ -212,12 +212,14 @@ function plot_trace_back(fixed_disk, freq, shift)
     end
     p = deepcopy(optim_params)
     p.freq_range = freq + shift
+    p.sbdry_init = bdry
     # set fixed_disk to 0 here as we already inserted the missing distance
-    refl = calc_eout(p, optim_spacings, fixed_disk=0, reflect=true)[1][1]
+    refl = calc_eout(p, zeros(p.n_disk), fixed_disk=0, reflect=true)[2][1]
     full_fields = BoostFractor.transformer_trace_back(refl, p.m_reflect, bdry, p.coords, p.modes,
                                          prop=propagator1D, f=freq + shift)
     figure().set_size_inches(15, 12)
     plot_1d_field_pattern(-autorotate(full_fields[:,:,1]), bdry, freq + shift)
+    #plot_1d_field_pattern(full_fields[:,:,1], bdry, freq + shift)
 end
 
 function plot_sensitivity(;area=false)
