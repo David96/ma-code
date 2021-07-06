@@ -64,23 +64,26 @@ function plot_boostfactor(shift, fixed_disk, ax)
         p.freq_range = (freq_center - 100e6):0.004e9:(freq_center + shift + 100e6)
     end
     println("Calculating eout_0")
-    eout_0 = calc_eout(p, zeros(n_disk))[1, 1, :]
-    ax.plot(p.freq_range .* 1e-9, abs2.(eout_0))
+    eout_0 = calc_eout(p, zeros(n_disk))
+    ax.plot(p.freq_range .* 1e-9, abs2.(eout_0[1, 1, :]))
+    #println(eout_0)
 
-    optim_spacings = read_optim_spacing_from_file(
-                      "results/optim_$freq$(shift_text(shift))_f$(fixed_disk)_$version.txt")
-    if fixed_disk > 0
-        optim_spacings_0 = read_optim_spacing_from_file(
-                            "results/optim_$(parse(Float64, freq) + shift)_v1.txt")
-        update_distances(p, distances_from_spacing(optim_spacings_0),
-                         update_itp = false)
-        ax.plot(p.freq_range .* 1e-9, abs2.(calc_eout(p, zeros(n_disk))[1, 1, :]))
-        update_distances(p, distances, update_itp=false)
+    if shift != 0
+        optim_spacings = read_optim_spacing_from_file(
+                          "results/optim_$freq$(shift_text(shift))_f$(fixed_disk)_$version.txt")
+        if fixed_disk > 0
+            optim_spacings_0 = read_optim_spacing_from_file(
+                                "results/optim_$(parse(Float64, freq) + shift)_v1.txt")
+            update_distances(p, distances_from_spacing(optim_spacings_0),
+                             update_itp = false)
+            ax.plot(p.freq_range .* 1e-9, abs2.(calc_eout(p, zeros(n_disk))[1, 1, :]))
+            update_distances(p, distances, update_itp=false)
+        end
+        println("Calculating shifted eout")
+        ax.plot(p.freq_range .* 1e-9,
+             abs2.(calc_eout(p, optim_spacings, fixed_disk = fixed_disk)[1, 1, :]))
+        ax.legend(["\$f_0\$", "Free", "Fixed disk $fixed_disk"])
     end
-    println("Calculating shifted eout")
-    ax.plot(p.freq_range .* 1e-9,
-         abs2.(calc_eout(p, optim_spacings, fixed_disk = fixed_disk)[1, 1, :]))
-    ax.legend(["\$f_0\$", "Free", "Fixed disk $fixed_disk"])
 
     ax.set_ylabel("Boostfactor")
     ax.set_xlabel("Frequency [GHz]")
