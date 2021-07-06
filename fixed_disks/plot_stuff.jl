@@ -242,13 +242,27 @@ function plot_sensitivity(;area=false)
         append!(b, freqs[key])
     end
     bfs_norm = b ./ minimum(b)
-    plot(f, bfs_norm)
-    println(f)
-    xticks(1e10:1e9:3e10)
-    grid()
-    #xticks(1e10:0.5e9:3e10, minor=true)
-    #grid(which="minor", alpha=0.2)
-    #grid(which="major", alpha=0.5)
+    ax = figure().subplots()
+    ax.set_xlabel("Frequency [GHz]")
+    ax.set_ylabel("Sensitivity")
+    ax.set_xticks((f[1] / 1e9):2.0:(f[end] / 1e9))
+    ax.set_xticks((f[1] / 1e9):0.5:(f[end] / 1e9), minor=true)
+    ax.grid(which="minor", alpha=0.2)
+    ax.grid(which="major", alpha=0.5)
+    l1, = ax.plot(f ./ 1e9, bfs_norm)
+
+    ax_pd = twinx()
+    ax_pd.set_ylabel("Pase depth")
+    l2, = ax_pd.plot(f ./ 1e9, map(f -> get_phase_depth(f, 24, 1e-3), f) / π, color="red")
+    ax_pd.set_yticks(0:0.25:1.25)
+    ax_pd.set_yticklabels(map(y -> "$(y)π", 0:0.25:1.25))
+    ax_pd.grid()
+
+    ax.legend([l1, l2], ["Sensitivity", "Phase depth"], loc=0)
+end
+
+function get_phase_depth(f, eps, d)
+    2π * f * d * sqrt(eps) / 3e8
 end
 
 """
