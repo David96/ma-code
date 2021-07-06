@@ -35,24 +35,33 @@ mutable struct BoosterParams
     modes
     m_reflect
     itp_sub
+    prop
     constraints::BoosterConstraints
 end
 
 get_freq_optim(center, width) = range(center - width / 2, stop=center + width / 2, length=8)
 
 function init_optimizer(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_width, freq_range,
-        distance, eps; constraints=BoosterConstraints(6e-3, 48e-3, 304e-3))
+        distance, eps; three_dims=false, constraints=BoosterConstraints(6e-3, 48e-3, 304e-3))
     freq_optim = get_freq_optim(freq_center, freq_width)
-    coords = SeedCoordinateSystem(X = [1e-9], Y = [1e-9])
+    if three_dims
+        dx = 0.007
+        X = -0.5:dx:0.5
+        Y = -0.5:dx:0.5
+        coords = SeedCoordinateSystem(X = X, Y = Y)
+    else
+        coords = SeedCoordinateSystem(X = [1e-9], Y = [1e-9])
+    end
     n_regions = 2 * n_disk + 2
     thickness_var = zeros(n_regions, 1, 1)
     sbdry_init = SeedSetupBoundaries(coords, diskno=n_disk, distance=distance, epsilon=eps,
                                      relative_surfaces=thickness_var)
-    modes = SeedModes(coords, ThreeDim=false, Mmax = Mmax, Lmax = Lmax, diskR = diskR)
+    modes = SeedModes(coords, ThreeDim=three_dims, Mmax = Mmax, Lmax = Lmax, diskR = diskR)
     m_reflect = zeros(Mmax * (2 * Lmax + 1))
     m_reflect[Lmax + 1] = 1.0
     p = BoosterParams(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_width, freq_optim,
-                      freq_range, coords, sbdry_init, modes, m_reflect, nothing, constraints)
+                      freq_range, coords, sbdry_init, modes, m_reflect, nothing,
+                      three_dims ? propagator : propagator1D, constraints)
     update_itp_sub(p)
     return p
 end
@@ -61,7 +70,7 @@ function update_itp_sub(p::BoosterParams; range=-2500:50:2500)
     spacing_grid = (range)*1e-6
     prop_matrix_grid_sub = calc_propagation_matrices_grid(p.sbdry_init, p.coords, p.modes,
                                                           spacing_grid, p.freq_optim,
-                                                          diskR=p.diskR, prop=propagator1D)
+                                                          diskR=p.diskR, prop=p.prop)
     p.itp_sub = construct_prop_matrix_interpolation(prop_matrix_grid_sub, spacing_grid)
 end
 
@@ -143,7 +152,7 @@ function cost_fun(p::BoosterParams, fixed_disk)
         end
 
         calc_boostfactor_cost(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords,
-                              p.modes, p.m_reflect, diskR=p.diskR, prop=propagator1D) + penalty
+                              p.modes, p.m_reflect, diskR=p.diskR, prop=p.prop) + penalty
     end
 end
 
@@ -151,7 +160,7 @@ function cost_fun_equidistant(p::BoosterParams)
     return x -> begin
         x_0 = fill(x[1], p.n_disk)
         calc_boostfactor_cost(x_0, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords,
-                              p.modes, p.m_reflect, diskR=p.diskR, prop=propagator1D)
+                              p.modes, p.m_reflect, diskR=p.diskR, prop=p.prop)
     end
 end
 
@@ -243,14 +252,14 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false)
     #Calculate prop matrix grid at a dist shift of zero of optimized setup
     prop_matrix_grid_plot = calc_propagation_matrices_grid(sbdry_optim, p.coords, p.modes, 0,
                                                            p.freq_range, diskR=p.diskR,
-                                                           prop=propagator1D)
+                                                           prop=p.prop)
     prop_matrix_plot = [prop_matrix_grid_plot[r,f,1,1,1,:,:] for r = 1:(2 * p.n_disk + 2),
                         f = 1:length(p.freq_range)]
     if reflect
         calc_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrix_plot, p.m_reflect,
-                   diskR=p.diskR, prop=propagator1D)
+                   diskR=p.diskR, prop=p.prop)
     else
         calc_boostfactor_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrix_plot,
-                               diskR=p.diskR, prop=propagator1D)
+                               diskR=p.diskR, prop=p.prop)
     end
 end
