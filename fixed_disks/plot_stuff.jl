@@ -148,12 +148,12 @@ function plot_bf_quality(fixed_disks, shift_range; area=true)
                 optim_spacings = read_optim_spacing_from_file(
                                     "results/optim_$freq$(s)_f$(fixed_disk)_$version.txt")
                 cost = calc_real_bf_cost(optim_params, optim_spacings, fixed_disk = fixed_disk,
-                                         area=area)
+                                                 area=area)
                 push!(qualities[i], cost / cost_0)
             end
         end
     end
-    figure().set_size_inches(15, 12)
+    #figure().set_size_inches(12, 10)
     ax = subplot(1, 1, 1)
     #println(qualities)
     for quality in qualities
@@ -162,12 +162,12 @@ function plot_bf_quality(fixed_disks, shift_range; area=true)
     ax.legend(legend_text, bbox_to_anchor=(1.01, 1.01))
     ax.set_xlabel("Frequency shift [GHz]")
     ax.set_ylabel("Boostfactor quality")
-    ax.set_xticks(-2.5:0.5:2.5)
-    ax.set_xticks(-2.5:0.05:2.5, minor=true)
+    ax.set_xticks(-2.0:0.5:2.0)
+    ax.set_xticks(-2.0:0.05:2.0, minor=true)
     #grid(xdata=shift_range .* 1e-6, ydata=0.65:0.05:1.15)
     ax.grid(which="minor", alpha=0.2)
     ax.grid(which="major", alpha=0.5)
-    ax.set_ylim(0.55, 1.10)
+    ax.set_ylim(0.40, 1.1)
 end
 
 function plot_modes(freq, mmax, lmax)
@@ -244,21 +244,20 @@ function plot_sensitivity(;area=false)
     bfs_norm = b ./ minimum(b)
     ax = figure().subplots()
     ax.set_xlabel("Frequency [GHz]")
-    ax.set_ylabel("Sensitivity")
+    ax.set_ylabel("Boostfactor magnitude")
     ax.set_xticks((f[1] / 1e9):2.0:(f[end] / 1e9))
     ax.set_xticks((f[1] / 1e9):0.5:(f[end] / 1e9), minor=true)
     ax.grid(which="minor", alpha=0.2)
     ax.grid(which="major", alpha=0.5)
     l1, = ax.plot(f ./ 1e9, bfs_norm)
 
-    ax_pd = twinx()
-    ax_pd.set_ylabel("Pase depth")
-    l2, = ax_pd.plot(f ./ 1e9, map(f -> get_phase_depth(f, 24, 1e-3), f) / π, color="red")
-    ax_pd.set_yticks(0:0.25:1.25)
-    ax_pd.set_yticklabels(map(y -> "$(y)π", 0:0.25:1.25))
-    ax_pd.grid()
+    ax_pd = twiny()
+    ax_pd.set_xlabel("Phase depth (\$\\delta=\\omega nd\$)")
+    #l2, = ax_pd.plot(f ./ 1e9, map(f -> get_phase_depth(f, 24, 1e-3), f) / π, color="red")
+    ax_pd.set_xticks(0:0.25:1.25)
+    ax_pd.set_xticklabels(map(y -> "$(y)π", 0:0.25:1.25))
 
-    ax.legend([l1, l2], ["Sensitivity", "Phase depth"], loc=0)
+    #ax.legend(["Sensitivity"], loc=0)
 end
 
 function get_phase_depth(f, eps, d)
