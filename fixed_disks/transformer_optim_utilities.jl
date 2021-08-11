@@ -108,6 +108,22 @@ function calc_boostfactor_modes(sbdry,coords,modes, frequencies, prop_matrices_s
     return EoutModes0
 end;
 
+function calc_boostfactor_modes_jacobian(sbdry,coords,modes, frequencies, prop_matrices_set::Array{Array{Complex{T},2},2}; diskR=0.15,prop=propagator) where T<:Real
+    n_freq = length(frequencies)
+    n_modes = size(prop_matrices_set[1,1])[1]
+    n_gaps = length(sbdry.eps)÷2
+    EoutModes0 = Array{Complex{T},3}(undef,1,n_modes,n_freq)
+    EoutModes0_jac = Array{Complex{T},3}(undef,n_gaps,n_modes,n_freq)
+
+    # Sweep over frequency
+    Threads.@threads for f in 1:n_freq
+    #for f in 1:n_freq
+        boost, boost_grad = transformer_gradient(sbdry,coords,modes; prop=prop,diskR=diskR,f=frequencies[f],propagation_matrices=prop_matrices_set[:,f],reflect=nothing)
+        EoutModes0[1,:,f] =  boost
+        EoutModes0_jac[:,:,f] = boost_grad
+    end
+    return EoutModes0, EoutModes0_jac
+end;
 
 """
 Calculates boostfactor and reflectivity
@@ -141,6 +157,27 @@ function calc_boostfactor_cost(dist_shift::Array{T,1},itp,frequencies,sbdry::Set
     cpld_pwr = abs2.(sum(conj.(Eout[1,:,:]).*m_reflect, dims=1)[1,:])
     cost =  -p_norm(cpld_pwr,-20)*penalty
     return cost
+end;
+
+function calc_boostfactor_cost_gradient(dist_shift::Array{T,1},itp,frequencies,sbdry::SetupBoundaries,coords::CoordinateSystem,modes::Modes,m_reflect; diskR=0.15, prop=propagator) where T<:Real
+    dist_bound_hard = Interpolations.bounds(itp)[3]
+    #Return hard penalty when exceeding interpolation bounds
+    if any(.!(dist_bound_hard[1] .< dist_shift .< dist_bound_hard[2])) #|| !(dist_bound_hard[1]<-sum(dist_shift)<dist_bound_hard[2])
+        return 1000.0, zeros(size(dist_shift))
+    end
+    #Add soft penalty when approaching interpolation bounds
+    penalty = soft_box_penalty(dist_shift,dist_bound_hard)
+
+    prop_matrices_set_interp = interpolate_prop_matrix(itp,dist_shift);
+    Eout, Eout_jacobian = calc_boostfactor_modes_jacobian(sbdry,coords,modes,frequencies,prop_matrices_set_interp, diskR=diskR, prop=prop)
+    cpld_amp = sum(conj.(Eout[1,:,:]).*m_reflect, dims=1)[1,:]
+    cpld_pwr = abs2.(cpld_amp)
+    cpld_amp_jacobian =  hcat([conj.(Eout_jacobian[:,:,f]) * m_reflect for f in 1:length(frequencies)]...)
+    cpld_pwr_jacobian = real.(cpld_amp_jacobian.*transpose(conj.(cpld_amp)) + conj.(cpld_amp_jacobian).*transpose(cpld_amp))
+    cost =  -p_norm(cpld_pwr,-20)*penalty
+    cost_grad = -partial_p_norm(cpld_pwr,cpld_pwr_jacobian,-20)
+
+    return cost, cost_grad
 end;
 
 """
@@ -212,6 +249,96 @@ function p_norm(X::Array{T,1},p) where T<:Real
     magnitude = maximum(X)
     X_norm = X ./ magnitude
     return magnitude*(1/length(X) * sum(X_norm.^p))^(1/p)
+end
+
+function partial_p_norm(X,jacobian_X,p)
+    magnitude = maximum(X)
+    X_norm = X ./ magnitude
+    jacobian_X_norm = jacobian_X 
+    return length(X)^(-1/p).*(sum(X_norm.^p))^(1/p-1).*(sum(jacobian_X*(X_norm.^(p-1)),dims=2))
+end
+
+"""
+Transformer Algorithm using Transfer Matrices and Modes to do the 3D Calculation.
+"""
+function transformer_gradient(bdry::SetupBoundaries, coords::CoordinateSystem, modes::Modes; f=10.0e9, velocity_x=0, prop=propagator, propagation_matrices::Array{Array{Complex{Float64},2},1}=Array{Complex{Float64},2}[], diskR=0.15, emit=BoostFractor.axion_induced_modes(coords,modes;B=nothing,velocity_x=velocity_x,diskR=diskR), reflect=nothing)
+    # For the transformer the region of the mirror must contain a high dielectric constant,
+    # as the mirror is not explicitly taken into account
+    # To have same SetupBoundaries object for all codes and cheerleader assumes NaN, just define a high constant
+    bdry.eps[isnan.(bdry.eps)] .= 1e30
+    Nregions = length(bdry.eps)
+    Ngaps = (Nregions)÷2
+
+    #Definitions
+    transmissionfunction_complete = [modes.id modes.zeromatrix ; modes.zeromatrix modes.id ]
+    transmissionfunction_partials = [[modes.id modes.zeromatrix ; modes.zeromatrix modes.id ] for k in 1:Ngaps]
+    lambda = wavelength(f)
+
+    initial = emit
+
+
+    axion_beam = Array{Complex{Float64}}(zeros((modes.M)*(2modes.L+1)))
+    axion_beam_partials = [Array{Complex{Float64}}(zeros((modes.M)*(2modes.L+1))) for k in 1:Ngaps]
+    
+    k0 = 2pi/lambda*sqrt(bdry.eps[2])
+    k_t = reshape(transpose(modes.mode_kt),modes.M*(2*modes.L+1))
+    kz = diagm(sqrt.(k0^2 .- k_t.^2))
+    diff_kz = -1im*[kz modes.zeromatrix ; modes.zeromatrix -kz]
+
+    idx_reg(s) = Nregions-s+1
+
+
+    for s in (Nregions-1):-1:1
+        # Add up the summands of (M[2,1]+M[1,1]) E_0
+        # (M is a sum over T_{s+1}^m S_s from s=1 to m) and we have just calculated
+        #  T_{s+1}^m in the previous iteration)
+        axion_beam .+= BoostFractor.axion_contrib(transmissionfunction_complete, sqrt(bdry.eps[idx_reg(s+1)]), sqrt(bdry.eps[idx_reg(s)]), initial, modes)
+
+        # calculate T_s^m ---------------------------
+
+        # Propagation matrix (later become the subblocks of P)
+        diffprop = (isempty(propagation_matrices) ?
+                        propagation_matrix(bdry.distance[idx_reg(s)], diskR, bdry.eps[idx_reg(s)], bdry.relative_tilt_x[idx_reg(s)], bdry.relative_tilt_y[idx_reg(s)], bdry.relative_surfaces[idx_reg(s),:,:], lambda, coords, modes; prop=prop) :
+                        propagation_matrices[idx_reg(s)])
+
+
+
+        # G_s P_s
+        transmissionfunction_bdry = BoostFractor.get_boundary_matrix(sqrt(bdry.eps[idx_reg(s)]), sqrt(bdry.eps[idx_reg(s+1)]), diffprop, modes)     
+        # T_s^m = T_{s+1}^m G_s P_s
+        transmissionfunction_partials .*= [transmissionfunction_bdry]
+        transmissionfunction_complete = transmissionfunction_partials[end]
+
+        #insert ∂_k(G_k P_k) = G_k P_k diff_kz at correct position 
+        transmissionfunction_partials[2*(1:Ngaps).==idx_reg(s)] .*= [diff_kz]   
+     
+        for k in 1:idx_reg(s)÷2#integer division is important
+            #we only add those summands that contain ∂_k(G_k P_k) in their "T_s^m" 
+            #since any ∂_k(T_s^m) not depending on P_k is zero
+            axion_beam_partials[k] .+= BoostFractor.axion_contrib(transmissionfunction_partials[k], sqrt(bdry.eps[idx_reg(s+1)]), sqrt(bdry.eps[idx_reg(s)]), initial, modes)
+        end
+         
+    end
+
+    # The rest of 4.14a
+    boost =  - (transmissionfunction_complete[BoostFractor.index(modes,2),BoostFractor.index(modes,2)]) \ (axion_beam)
+    boost_grad =  Array{Complex{Float64}}(zeros(Ngaps,(modes.M)*(2modes.L+1)))
+    for k in 1:Ngaps
+        boost_grad[k,:] = -(transmissionfunction_complete[BoostFractor.index(modes,2),BoostFractor.index(modes,2)]) \ (-axion_beam_partials[k] .+ transmissionfunction_partials[k][BoostFractor.index(modes,2),BoostFractor.index(modes,2)]*boost)
+    end
+    
+    # If no reflectivity is ought to be calculated, we only return the axion field
+    if reflect === nothing
+        return boost, boost_grad
+    end
+
+    refl = -transmissionfunction_complete[BoostFractor.index(modes,2),BoostFractor.index(modes,2)] \
+           ((transmissionfunction_complete[BoostFractor.index(modes,2),BoostFractor.index(modes,1)]) * (reflect))
+    refl_grad = Array{Complex{Float64}}(zeros(Ngaps,(modes.M)*(2modes.L+1)))
+    for k in 1:Ngaps
+        refl_grad[k,:] = -(transmissionfunction_complete[BoostFractor.index(modes,2),BoostFractor.index(modes,2)]) \ (transmissionfunction_partials[k][BoostFractor.index(modes,2),BoostFractor.index(modes,1)]*reflect .+ transmissionfunction_partials[k][BoostFractor.index(modes,2),BoostFractor.index(modes,2)]*refl)
+    end
+    return boost, boost_grad, refl, refl_grad
 end
 
  ############################################################################

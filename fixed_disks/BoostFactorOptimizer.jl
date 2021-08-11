@@ -130,7 +130,7 @@ function apply_constraints(p::BoosterParams, x)
     return penalty
 end
 
-function cost_fun(p::BoosterParams, fixed_disk)
+function cost_fun(p::BoosterParams, fixed_disk; gradient=false)
     return x -> begin
         penalty = 0.
         # if one disk is fixed, insert it into dist_shift as the optimizer then runs on one
@@ -151,8 +151,14 @@ function cost_fun(p::BoosterParams, fixed_disk)
             return 1000.
         end
 
-        calc_boostfactor_cost(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords,
-                              p.modes, p.m_reflect, diskR=p.diskR, prop=p.prop) + penalty
+        if gradient
+            cost, grad = calc_boostfactor_cost_gradient(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords,
+                                  p.modes, p.m_reflect, diskR=p.diskR, prop=p.prop)
+            cost + penalty, grad
+        else
+            calc_boostfactor_cost(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords,
+                                  p.modes, p.m_reflect, diskR=p.diskR, prop=p.prop) + penalty
+        end
     end
 end
 
