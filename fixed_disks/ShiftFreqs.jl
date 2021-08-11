@@ -1,24 +1,25 @@
 using Distributed, ClusterManagers
 
-addprocs(SlurmManager(21), partition="maxwell", t="01:30:00", nodes="2-6")
+addprocs(SlurmManager(21), partition="maxwell", t="02:00:00", nodes="4-6")
 
 @everywhere begin
-    include("BoostFactorOptimizer.jl")
-    include("FileUtils.jl")
+    include("../common/BoostFactorOptimizer.jl")
+    include("../common/FileUtils.jl")
 
     using BoostFractor
 
     # %%
 
     freq_center = 22e9
-    freq_width = 50e6
-    freq_shift = 50e6
+    freq_width = 25e6
 
     epsilon = 24
     n_disk = 20
     n_region = 2 * n_disk + 2
 
-    freq_0_spacing = read_optim_spacing_from_file("results/optim_2.2e10_2021-04-26.txt")
+    #freq_0_spacing = read_optim_spacing_from_file("results/optim_2.2e10_2021-04-26.txt")
+    #freq_0_spacing = read_optim_spacing_from_file("results/optim_1.5e10_v1.txt")
+    freq_0_spacing = read_optim_spacing_from_file("results/optim_2.2e10_v1.txt")
 
     println("Loaded spacings from file: $freq_0_spacing")
 
@@ -27,10 +28,11 @@ addprocs(SlurmManager(21), partition="maxwell", t="01:30:00", nodes="2-6")
     distance = distances_from_spacing(freq_0_spacing)
     optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq_center, freq_width,
                                   freq_range, distance, eps)
+    #using PyPlot
     #eout_0 = calc_eout(optim_params, zeros(n_disk))[1, 1, :]
-    #
+
     #plot(freq_range .* 1e-9, abs2.(eout_0))
-    min_shift = -1500e6
+    #show()
 end
 
 # %%
@@ -49,8 +51,8 @@ end
 
 shift = parse(Float64, ARGS[1])
 @sync for fd in 0:n_disk
-    if abs(shift) != 50e6
-        shift_before = shift < 0 ? "$(shift + 50e6)" : "+$(shift - 50e6)"
+    if abs(shift) != freq_width
+        shift_before = shift < 0 ? "$(shift + freq_width)" : "+$(shift - freq_width)"
         s0 = read_optim_spacing_from_file("results/optim_$(freq_center)$(shift_before)_f$(fd)_v1.txt")
     else
         s0 = zeros(n_disk - (fd == 0 ? 0 : 1))

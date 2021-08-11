@@ -1,5 +1,5 @@
-include("FileUtils.jl")
-include("BoostFactorOptimizer.jl")
+include("../common/FileUtils.jl")
+include("../common/BoostFactorOptimizer.jl")
 
 using BoostFractor
 using Glob
@@ -11,7 +11,7 @@ using PyPlot
 
 # %%
 
-freq = "1.5e10"
+freq = "2.2e10"
 shift = "5.0e7"
 version = "v1"
 
@@ -66,6 +66,10 @@ function plot_boostfactor(shift, fixed_disk, ax)
     println("Calculating eout_0")
     eout_0 = calc_eout(p, zeros(n_disk))
     ax.plot(p.freq_range .* 1e-9, abs2.(eout_0[1, 1, :]))
+    p2 = deepcopy(p)
+    update_distances(p2, distances_from_spacing(read_init_spacing_from_file("results/init_2.2e10.txt"), n_region), update_itp=false)
+    #ax.plot(p.freq_range .* 1e-9, abs2.(calc_eout(p2, zeros(n_disk))[1, 1, :]))
+    #legend(["Broadband boostfactor", "Equidistant spacing"])
     #println(eout_0)
 
     if shift != 0
@@ -195,9 +199,13 @@ function plot_modes(freq, mmax, lmax)
     legend(l)
 end
 
-function plot_trace_back(fixed_disk, freq, shift)
+function plot_trace_back(fixed_disk, freq, shift; offset=0, equidistant=false)
     if fixed_disk == 0 && shift == 0
-        optim_spacings = read_optim_spacing_from_file("results/optim_$(freq)_$version.txt")
+        if equidistant
+            optim_spacings = read_init_spacing_from_file("results/init_$(freq).txt")
+        else
+            optim_spacings = read_optim_spacing_from_file("results/optim_$(freq)_$version.txt")
+        end
     else
         optim_spacings = read_optim_spacing_from_file("results/optim_$(freq)$(shift_text(shift))_f$(fixed_disk)_$version.txt")
     end
@@ -211,13 +219,13 @@ function plot_trace_back(fixed_disk, freq, shift)
         bdry.distance[2:2:end-2] .+= optim_spacings
     end
     p = deepcopy(optim_params)
-    p.freq_range = freq + shift
+    p.freq_range = freq + shift + offset
     p.sbdry_init = bdry
     # set fixed_disk to 0 here as we already inserted the missing distance
     refl = calc_eout(p, zeros(p.n_disk), fixed_disk=0, reflect=true)[2][1]
     full_fields = BoostFractor.transformer_trace_back(refl, p.m_reflect, bdry, p.coords, p.modes,
-                                         prop=propagator1D, f=freq + shift)
-    figure().set_size_inches(15, 12)
+                                         prop=propagator1D, f=freq + shift + offset)
+    figure().set_size_inches(15, 8)
     plot_1d_field_pattern(-autorotate(full_fields[:,:,1]), bdry, freq + shift)
     #plot_1d_field_pattern(full_fields[:,:,1], bdry, freq + shift)
 end
@@ -241,7 +249,12 @@ function plot_sensitivity(;area=false)
         append!(f, key)
         append!(b, freqs[key])
     end
-    bfs_norm = b ./ minimum(b)
+    bfs_norm = nothing
+    if area
+        bfs_norm = b ./ -50e6
+    else
+        bfs_norm = b ./ minimum(b)
+    end
     ax = figure().subplots()
     ax.set_xlabel("Frequency [GHz]")
     ax.set_ylabel("Boostfactor magnitude")

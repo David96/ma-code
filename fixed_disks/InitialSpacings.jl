@@ -1,10 +1,10 @@
 using Distributed, ClusterManagers
 
-addprocs(SlurmManager(20), partition="maxwell", t="01:30:00", nodes="6")
+#addprocs(SlurmManager(21), partition="maxwell", t="01:30:00", nodes="2-6")
 
 @everywhere begin
-    include("BoostFactorOptimizer.jl")
-    include("FileUtils.jl")
+    include("../common/BoostFactorOptimizer.jl")
+    include("../common/FileUtils.jl")
 
     using BoostFractor
     using Dates
@@ -18,9 +18,12 @@ addprocs(SlurmManager(20), partition="maxwell", t="01:30:00", nodes="6")
 end
 
 # %%
-
-
-@sync @distributed for freq_center in (22e9 - 2.5e9):50e6:(22e9 + 2.5e9)
+f0= 22e9
+freq_center = 32e9
+@sync @distributed for freq_center in [25.5e9]#(f0 - 2.5e9):50e6:(f0 + 2.5e9)
+    if isfile("results/optim_$(freq_center)_v7.txt")
+        #continue
+    end
     init_spacing = 0.0
     if isfile("results/init_$(freq_center).txt")
         init_spacing = read_init_spacing_from_file("results/init_$freq_center.txt")
@@ -37,7 +40,7 @@ end
         let
             best_spacing = 0.0
             best_boost = 0.0
-            for i in 0.001:0.000001:0.01
+            for i in 0.005:0.000001:0.006
                 optim_params.sbdry_init.distance = distances_from_spacing(i, n_region)
 
                 boost_factor = abs2(transformer(optim_params.sbdry_init, optim_params.coords,
@@ -57,11 +60,21 @@ end
     end
 
     # %%
-
-    spacings = optimize_spacings(optim_params, 0)
+    spacings = nothing
+    prev_freq = freq_center > f0 ? freq_center - 500e6 : freq_center + 50e6
+    if isfile("results/optim_$(prev_freq)_v1.txt")
+        optim_spacings = read_optim_spacing_from_file("results/optim_$(prev_freq)_v1.txt")
+        println("Got old optim_spacings, starting from there")
+        update_distances(optim_params, distances_from_spacing(optim_spacings))
+        init_spacing = 0.
+        spacings = optimize_spacings(optim_params, 0)
+        spacings += optim_spacings
+    else
+        spacings = optimize_spacings(optim_params, 0)
+    end
 
     # %%
-    println("Writing spacings to file: $(spacings .+ init_spacing)")
+    println("Writing spacings to file: $(spacings) + $(init_spacing)")
     # init_spacing has to be added here because spacings are relative to it and we don't wanna care
     # about that when loading the spacings
     write_optim_spacing_to_file(spacings .+ init_spacing, freq_center)
