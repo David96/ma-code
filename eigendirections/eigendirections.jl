@@ -1,6 +1,6 @@
 using Distributed, ClusterManagers
 
-if ENV["SLURM_AVAILABLE"] == "true"
+if haskey(ENV, "SLURM_AVAILABLE") && ENV["SLURM_AVAILABLE"] == "true"
     addprocs(SlurmManager(21), partition="maxwell", t="02:00:00", nodes="2-6", kill_on_bad_exit="1",
              cpus_per_task="8")
 end
@@ -56,7 +56,7 @@ end
         end
     end
 
-    function calc_eigendirections(freq; M=1000, variation = 100e-6)
+    function get_optim_params(freq)
         freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9)
 
         eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
@@ -64,8 +64,13 @@ end
 
         distances = distances_from_spacing(init_spacing, n_region)
 
-        optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, 50e6, freq_range,
+        init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, 50e6, freq_range,
                                       distances, eps)
+    end
+
+    function calc_eigendirections(freq; M=1000, variation = 100e-6)
+        optim_params = get_optim_params(freq)
+
         #Eigenvalue decomposition
         C_matrix = calc_C_matrix(zeros(n_disk), optim_params, M=M, variation=variation)
         eigen_decomp = eigen(C_matrix)
@@ -122,6 +127,18 @@ function plot_eigendirections(freq, n)
     end
 
     tight_layout()
+end
+
+function optimize_bf_with_eigendirections(freq; M=2000, variation=60e-6, n=1024, n_dim=5)
+    eigenvalues, eigendirections = calc_eigendirections(freq, M=M, variation=variation)
+    optim_params = get_optim_params(freq)
+    optim_spacings = optimize_spacings(optim_params, 0, n=n, starting_point=zeros(n_dim),
+                                       cost_function=cost_fun_rot(optim_params, eigendirections))
+    optim_spacings = eigendirections[:,1:length(optim_spacings)] * optim_spacings
+    write_optim_spacing_to_file(optim_spacings .+ optim_params.sbdry_init[2:2:end-2],
+                                freq)
+    #eout = calc_eout(optim_params, optim_spacings)
+    #plot(optim_params.freq_range .* 1e-9, abs2.(eout[1, 1, :]))
 end
 
 #function update(plt, eigendirections, i)

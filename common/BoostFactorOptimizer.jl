@@ -162,6 +162,14 @@ function cost_fun(p::BoosterParams, fixed_disk; gradient=false)
     end
 end
 
+function cost_fun_rot(p::BoosterParams, eigendirections)
+    cf = cost_fun(p, 0)
+    return x -> begin
+        x_r = eigendirections[:,1:length(x)] * x
+        return cf(x_r)
+    end
+end
+
 function cost_fun_equidistant(p::BoosterParams)
     return x -> begin
         x_0 = fill(x[1], p.n_disk)
@@ -175,13 +183,13 @@ algorithms = [BFGS(linesearch = BackTracking(order=2)), LBFGS(linesearch = BackT
 algorithm = BFGS(linesearch = BackTracking(order=2))
 options = Optim.Options(f_tol = 1e-6)
 
-function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zeros(p.n_disk))
+function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zeros(p.n_disk),
+                           cost_function=cost_fun(p, fixed_disk), n=1024)
     spacings = Vector{Float64}()
     best_cost = Atomic{Float64}(1000.)
-    cost_function = cost_fun(p, fixed_disk)
     lk = SpinLock()
     # Run initial optimization a few times and pick the best one
-    @threads for i in 1:1024
+    @threads for i in 1:n
         # Add some random variation to start spacing.
         # Convergence very much depends on a good start point.
         x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .* 100e-6
