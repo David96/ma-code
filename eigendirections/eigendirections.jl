@@ -83,6 +83,18 @@ end
         eigendirections = eigendirections[:,p]
         return eigenvalues, eigendirections
     end
+
+    function optimize_bf_with_eigendirections(freq; M=2000, variation=60e-6, n=1024, n_dim=5)
+        eigenvalues, eigendirections = calc_eigendirections(freq, M=M, variation=variation)
+        optim_params = get_optim_params(freq)
+        optim_spacings = optimize_spacings(optim_params, 0, n=n, starting_point=zeros(n_dim),
+                                           cost_function=cost_fun_rot(optim_params, eigendirections))
+        optim_spacings = eigendirections[:,1:length(optim_spacings)] * optim_spacings
+        write_optim_spacing_to_file(optim_spacings .+ optim_params.sbdry_init.distance[2:2:end-2],
+                                    freq)
+        #eout = calc_eout(optim_params, optim_spacings)
+        #plot(optim_params.freq_range .* 1e-9, abs2.(eout[1, 1, :]))
+    end
 end
 
 function find_convergence(freq, M_range; N=50, variation=100e-6)
@@ -129,16 +141,10 @@ function plot_eigendirections(freq, n)
     tight_layout()
 end
 
-function optimize_bf_with_eigendirections(freq; M=2000, variation=60e-6, n=1024, n_dim=5)
-    eigenvalues, eigendirections = calc_eigendirections(freq, M=M, variation=variation)
-    optim_params = get_optim_params(freq)
-    optim_spacings = optimize_spacings(optim_params, 0, n=n, starting_point=zeros(n_dim),
-                                       cost_function=cost_fun_rot(optim_params, eigendirections))
-    optim_spacings = eigendirections[:,1:length(optim_spacings)] * optim_spacings
-    write_optim_spacing_to_file(optim_spacings .+ optim_params.sbdry_init[2:2:end-2],
-                                freq)
-    #eout = calc_eout(optim_params, optim_spacings)
-    #plot(optim_params.freq_range .* 1e-9, abs2.(eout[1, 1, :]))
+function optimize_range_with_eigendirections(freq_range; M=2000, variation=60e-6, n=1024, n_dim=5)
+    @sync @distributed for freq in freq_range
+        optimize_bf_with_eigendirections(freq, M=M, variation=variation, n=n, n_dim=n_dim)
+    end
 end
 
 #function update(plt, eigendirections, i)
