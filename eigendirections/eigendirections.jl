@@ -1,7 +1,7 @@
-using Distributed, ClusterManagers
+using Distributed, ClusterManagers, Glob
 
 if haskey(ENV, "SLURM_AVAILABLE") && ENV["SLURM_AVAILABLE"] == "true"
-    addprocs(SlurmManager(21), partition="maxwell", t="02:00:00", nodes="2-6", kill_on_bad_exit="1",
+    addprocs(SlurmManager(50), partition="maxwell", t="02:00:00", nodes="2-6", kill_on_bad_exit="1",
              cpus_per_task="8")
 end
 
@@ -84,16 +84,27 @@ end
         return eigenvalues, eigendirections
     end
 
-    function optimize_bf_with_eigendirections(freq; M=2000, variation=60e-6, n=1024, n_dim=5)
-        eigenvalues, eigendirections = calc_eigendirections(freq, M=M, variation=variation)
+    function optimize_bf_with_eigendirections(freq; M=2000, variation=60e-6, n=1024, n_dim=5,
+            eigendirections=nothing)
+        if eigendirections === nothing
+            eigenvalues, eigendirections = calc_eigendirections(freq, M=M, variation=variation)
+        end
         optim_params = get_optim_params(freq)
-        optim_spacings = optimize_spacings(optim_params, 0, n=n, starting_point=zeros(n_dim),
-                                           cost_function=cost_fun_rot(optim_params, eigendirections))
+        time = @elapsed optim_spacings =
+                            optimize_spacings(optim_params, 0, n=n, starting_point=zeros(n_dim),
+                                        cost_function=cost_fun_rot(optim_params, eigendirections))
         optim_spacings = eigendirections[:,1:length(optim_spacings)] * optim_spacings
-        write_optim_spacing_to_file(optim_spacings .+ optim_params.sbdry_init.distance[2:2:end-2],
-                                    freq)
+        time, optim_spacings
+        #write_optim_spacing_to_file(optim_spacings .+ optim_params.sbdry_init.distance[2:2:end-2],
+        #                            freq)
         #eout = calc_eout(optim_params, optim_spacings)
         #plot(optim_params.freq_range .* 1e-9, abs2.(eout[1, 1, :]))
+    end
+
+    function save_spacing_to_json(filename, freq, M, variation, n_dim, n, time, spacing)
+        data = Dict(:freq => freq, :M => M, :variation => variation, :n_dim => n_dim, :n => n,
+                    :time => time, :spacing => spacing)
+        write_json("results/$filename", data)
     end
 end
 
@@ -112,11 +123,31 @@ function find_convergence(freq, M_range; N=50, variation=100e-6)
         println("Diff = $(mean_diff)\nVariance: $variance")
         mean_diff, variance
     end
-    title("Eigenvalue differences at $freq")
-    ylabel("Difference")
-    xlabel("M")
-    errorbar(M_range[1:end], first.(diffs_var), yerr=map(x -> x[2], diffs_var))
-    savefig("ev_diffs.png")
+    data = Dict(:M_range => collect(M_range), :N => N, :variation => variation, :freq => freq,
+                :mean => first.(diffs_var), :variance => map(x -> x[2], diffs_var))
+    write_json("diffs_v=$variation.json", data)
+    #title("Eigenvalue differences at $freq")
+    #ylabel("Difference")
+    #xlabel("M")
+    #errorbar(M_range[1:end], first.(diffs_var), yerr=map(x -> x[2], diffs_var))
+    #savefig("ev_diffs.png")
+end
+
+function plot_diffs(dir)
+    legend_text = []
+    for json in glob("diffs_*.json", dir)
+        println("Found file $json")
+        data = read_json(json)
+        x = data["M_range"]
+        y = data["mean"]
+        error = data["variance"]
+        title("Eigenvalue differences at $(data["freq"])")
+        ylabel("Difference")
+        xlabel("M")
+        errorbar(x, y, yerr=error)
+        push!(legend_text, data["variation"])
+    end
+    legend(legend_text)
 end
 
 function plot_eigendirections(freq, n)
@@ -141,9 +172,26 @@ function plot_eigendirections(freq, n)
     tight_layout()
 end
 
-function optimize_range_with_eigendirections(freq_range; M=2000, variation=60e-6, n=1024, n_dim=5)
+function optimize_freq_range(freq_range; M=2000, variation=60e-6, n=1024, n_dim=5)
     @sync @distributed for freq in freq_range
-        optimize_bf_with_eigendirections(freq, M=M, variation=variation, n=n, n_dim=n_dim)
+        time, optim_spacings = optimize_bf_with_eigendirections(freq, M=M, variation=variation,
+                                                                n=n, n_dim=n_dim)
+        save_spacing_to_json("$(freq)_$(M)_$(variation)_$(n_dim).json", freq, M, variation,
+                             n_dim, n, time, optim_spacings)
+    end
+end
+
+function optimize_dim_range(freq, dim_range; M=2000, variation=60e-6, n=1024, rep=100)
+    _, eigendirections = calc_eigendirections(freq, M=M, variation=variation)
+    for n_dim in dim_range
+        reps = @distributed (vcat) for i in 1:rep
+            time, optim_spacings = optimize_bf_with_eigendirections(freq, M=M, variation=variation,
+                                                                    n=n, n_dim=n_dim,
+                                                                    eigendirections=eigendirections)
+            Dict(:freq => freq, :M => M, :variation => variation, :n_dim => n_dim, :n => n,
+                        :time => time, :spacing => optim_spacings)
+        end
+        write_json("spacings_n=$(n)_n-dim=$(n_dim).json", reps)
     end
 end
 

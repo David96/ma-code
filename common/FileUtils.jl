@@ -1,5 +1,6 @@
 using DelimitedFiles
 using Dates
+using JSON
 
 #prefix = "/beegfs/desy/user/lepplada/"
 prefix = ""
@@ -34,5 +35,15 @@ end
 function read_optim_spacing_from_file(file)
     open("$prefix$file", "r") do io
         readdlm(io, ',')[:]
+    end
+end
+
+function read_json(file)
+    JSON.parsefile(file)
+end
+
+function write_json(file, object)
+    open(file, "w") do f
+        JSON.print(f, object)
     end
 end
