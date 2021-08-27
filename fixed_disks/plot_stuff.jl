@@ -253,11 +253,15 @@ function plot_sensitivity(;area=false)
     if area
         bfs_norm = b ./ -50e6
     else
-        bfs_norm = b ./ minimum(b)
+        bfs_norm = -b
     end
     ax = figure().subplots()
     ax.set_xlabel("Frequency [GHz]")
-    ax.set_ylabel("Boostfactor magnitude")
+    if area
+        ax.set_ylabel("Boostfactor magnitude")
+    else
+        ax.set_ylabel("-C")
+    end
     ax.set_xticks((f[1] / 1e9):2.0:(f[end] / 1e9))
     ax.set_xticks((f[1] / 1e9):0.5:(f[end] / 1e9), minor=true)
     ax.grid(which="minor", alpha=0.2)
