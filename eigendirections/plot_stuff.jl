@@ -22,17 +22,33 @@ function plot_dims(dir; area=true)
                                   distances, eps)
     cost_0 = calc_real_bf_cost(optim_params, zeros(n_disk), fixed_disk=0, area=area)
     cost_0 = -convert(Float64, cost_0) / 50e6
-    println(cost_0)
-    plot([1, 20], [cost_0, cost_0])
+    _, ax1 = subplots()
+    ax2 = ax1.twinx()
+    ax1.plot([1, 20], [cost_0, cost_0])
 
     l = ["Reference"]
-    x = Vector{Int}()
-    y = Vector{Float64}()
-    yerr = Vector{Float64}()
+    x = Dict{Int, Vector{Int}}()
+    y = Dict{Int, Vector{Float64}}()
+    yerr = Dict{Int, Vector{Float64}}()
+    time = Dict{Int, Vector{Float64}}()
+    time_err = Dict{Int, Vector{Float64}}()
     for json in glob("spacings_*.json", dir)
         data = read_json(json)
-        push!(x, data[1]["n_dim"])
+        if !haskey(x, data[1]["n"])
+            x[data[1]["n"]] = Vector{Int}()
+            y[data[1]["n"]] = Vector{Float64}()
+            yerr[data[1]["n"]] = Vector{Float64}()
+            time[data[1]["n"]] = Vector{Float64}()
+            time_err[data[1]["n"]] = Vector{Float64}()
+        end
+        x_n = x[data[1]["n"]]
+        y_n = y[data[1]["n"]]
+        yerr_n = yerr[data[1]["n"]]
+        time_n = time[data[1]["n"]]
+        time_err_n = time_err[data[1]["n"]]
+        push!(x_n, data[1]["n_dim"])
         costs = Vector{Float64}()
+        times = Vector{Float64}()
         init_spacing = read_init_spacing_from_file("results/init_2.2e10.txt")
         freq = data[1]["freq"]
         f_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9)
@@ -44,24 +60,31 @@ function plot_dims(dir; area=true)
             cost_0 = calc_real_bf_cost(p, spacings, fixed_disk=0, area=area)
             cost_0 = -cost_0 / 50e6
             push!(costs, cost_0)
+            push!(times, d["time"])
         end
-        push!(y, mean(costs))
-        push!(yerr, std(costs))
-        println("")
+        push!(y_n, mean(costs))
+        push!(yerr_n, std(costs))
+        push!(time_n, mean(times))
+        push!(time_err_n, std(times))
     end
-    if length(x) > 0
-        push!(l, "TODO")
-        p = sortperm(x)
-        x = x[p]
-        y = y[p]
-        yerr = yerr[p]
-        errorbar(x, y, yerr=yerr)
+    ax2.plot([], [])
+    for (n, x_n) in x
+        push!(l, "n=$n")
+        p = sortperm(x_n)
+        x_n = x_n[p]
+        y_n = y[n][p]
+        time_n = time[n][p]
+        yerr_n = yerr[n][p]
+        time_err_n = time_err[n][p]
+        ax1.errorbar(x_n, y_n, yerr=yerr_n)
+        ax2.errorbar(x_n, time_n, yerr=time_err_n, ls="-.")
     end
-    xlabel("Dimensions")
-    ylabel("Boostfactor magnitude")
+    ax1.set_xlabel("Dimensions")
+    ax1.set_ylabel("Boostfactor magnitude")
+    ax2.set_ylabel("Time [s]")
     xticks(1:20)
     grid()
-    legend(l)
+    ax1.legend(l, bbox_to_anchor=(1.1, 1.01))
 end
 
 function plot_diffs(dir)
