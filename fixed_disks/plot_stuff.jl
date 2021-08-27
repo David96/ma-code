@@ -267,14 +267,20 @@ function plot_sensitivity(;area=false)
     ax_pd = twiny()
     ax_pd.set_xlabel("Phase depth (\$\\delta=\\omega nd\$)")
     #l2, = ax_pd.plot(f ./ 1e9, map(f -> get_phase_depth(f, 24, 1e-3), f) / π, color="red")
-    ax_pd.set_xticks(0:0.25:1.25)
-    ax_pd.set_xticklabels(map(y -> "$(y)π", 0:0.25:1.25))
+    ax_pd.set_xticks((get_freq(0.25π) / 1e9):(get_freq(0.125π) / 1e9):(get_freq(1π) / 1e9))
+    ax_pd.set_xticklabels(map(y -> "$(round(get_phase_depth(y * 1e9) / π, digits=3))π",
+                    (get_freq(0.25π) / 1e9):(get_freq(0.125π) / 1e9):(get_freq(1π) / 1e9)))
+    ax_pd.set_xlim(ax.get_xlim())
 
     #ax.legend(["Sensitivity"], loc=0)
 end
 
-function get_phase_depth(f, eps, d)
+function get_phase_depth(f, eps=24, d=1e-3)
     2π * f * d * sqrt(eps) / 3e8
+end
+
+function get_freq(phase_depth, eps=24, d=1e-3)
+    phase_depth * 3e8 / (2π * d * sqrt(eps))
 end
 
 """
