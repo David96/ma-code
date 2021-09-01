@@ -9,7 +9,6 @@ end
     using BoostFractor
     using Optim
     using ForwardDiff
-    using PyPlot
     using LinearAlgebra
     using Statistics
 
@@ -74,14 +73,13 @@ end
         return best_spacing
     end
 
-    function get_optim_params(freq)
-        freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9)
-
+    function get_optim_params(freq; freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9),
+                              update_itp=true)
         eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
         init_spacing = 0.0
         distances = distances_from_spacing(init_spacing, n_region)
         optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, 50e6, freq_range,
-                                      distances, eps)
+                                      distances, eps, update_itp=update_itp)
         if isfile("results/init_$(freq).txt")
             init_spacing = read_init_spacing_from_file("results/init_$(freq).txt")
         else
@@ -92,7 +90,7 @@ end
         return optim_params
     end
 
-    function calc_eigendirections(freq; M=1000, variation = 100e-6)
+    function calc_eigendirections(freq; M=2000, variation = 60e-6)
         optim_params = get_optim_params(freq)
 
         #Eigenvalue decomposition
@@ -182,17 +180,24 @@ function optimize_dim_range(freq, dim_range; M=2000, variation=60e-6, n=1024, re
 end
 
 function scan_freq_range(start_freq, freq_range; M=2000, variation=60e-6, n=128, n_dim=3,
-                         dir="results")
+                         dir="results", ref=false)
     _, eigendirections = calc_eigendirections(start_freq, M=M, variation=variation)
     freqs = @distributed (vcat) for freq in freq_range
+        if ref
+            _, eigendirections = calc_eigendirections(freq, M=M, variation=variation)
+        end
         time, optim_spacings = optimize_bf_with_eigendirections(freq,
                                                                 eigendirections=eigendirections,
                                                                 n_dim=n_dim, n=n)
 
         Dict(:freq => freq, :n_dim => n_dim, :n => n, :time => time, :spacing =>
-             optim_spacings, :eigendirections => eigendirections)
+             optim_spacings, :eigendirections => eigendirections, :ref => ref)
     end
-    write_json("$dir/spacings_n=$(n)_n-dim=$(n_dim).json", freqs)
+    if ref
+        write_json("$dir/spacings_ref_n=$(n)_n-dim=$(n_dim).json", freqs)
+    else
+        write_json("$dir/spacings_n=$(n)_n-dim=$(n_dim).json", freqs)
+    end
 end
 
 #function update(plt, eigendirections, i)
