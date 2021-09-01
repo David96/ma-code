@@ -42,7 +42,8 @@ end
 get_freq_optim(center, width) = range(center - width / 2, stop=center + width / 2, length=8)
 
 function init_optimizer(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_width, freq_range,
-        distance, eps; three_dims=false, constraints=BoosterConstraints(6e-3, 48e-3, 304e-3))
+        distance, eps; three_dims=false, constraints=BoosterConstraints(6e-3, 48e-3, 304e-3),
+        update_itp=true)
     freq_optim = get_freq_optim(freq_center, freq_width)
     if three_dims
         dx = 0.007
@@ -62,7 +63,9 @@ function init_optimizer(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_wi
     p = BoosterParams(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_width, freq_optim,
                       freq_range, coords, sbdry_init, modes, m_reflect, nothing,
                       three_dims ? propagator : propagator1D, constraints)
-    update_itp_sub(p)
+    if update_itp
+        update_itp_sub(p)
+    end
     return p
 end
 
