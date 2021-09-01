@@ -4,8 +4,13 @@ include("eigendirections.jl")
 
 using BoostFractor
 using Glob
-using PyPlot
+#using PyPlot
+using Plots
 using Statistics
+using LsqFit
+using Interact
+
+#plotlyjs()
 
 n_disk = 20
 n_region = 2 * n_disk + 2
@@ -85,6 +90,101 @@ function plot_dims(dir; area=true)
     xticks(1:20)
     grid()
     ax1.legend(l, bbox_to_anchor=(1.1, 1.01))
+end
+
+function plot_freq_scan(start_freq, dir; area=true)
+    x = Vector{Int}()
+    x_ref = Vector{Int}()
+    y = Vector{Float64}()
+    y_ref = Vector{Float64}()
+    for json in glob("spacings_*.json", dir)
+        data = read_json(json)
+        for d in data
+            # The 20x20 Matrix is saved as a Vector{Vector{Any}} in JSON…
+            # There might be easier ways of doing this.
+            eigendirections = reshape(reduce(vcat, convert(Vector{Vector{Float64}},
+                                                           d["eigendirections"])), (20, 20))
+            spacing = eigendirections[:, 1:d["n_dim"]] * d["spacing"]
+            optim_params = get_optim_params(d["freq"])
+            cost = -calc_real_bf_cost(optim_params, spacing, fixed_disk=0, area=area)
+            if haskey(d, "ref") && d["ref"] == true
+                push!(y_ref, cost)
+                push!(x_ref, d["freq"])
+            else
+                push!(y, cost)
+                push!(x, d["freq"])
+            end
+        end
+    end
+    plot(x, y)
+    plot(x_ref, y_ref)
+    legend(["Fixed eigendirections", "reference"])
+    legend("Boostfactor magnitude")
+end
+
+@. fit_function(x, p) = p[1] * (x - p[2])^2 + p[3]
+
+function plot_eigendirections_scan(start_freq, dir; plotting=true)
+    freqs = Vector{Int}()
+    spacings = Vector{Vector{Float64}}()
+    eigendirections = nothing
+    for json in glob("spacings_*.json", dir)
+        data = read_json(json)
+        for d in data
+            if !haskey(d, "ref") || d["ref"] == false
+                eigendirections = reshape(reduce(vcat, convert(Vector{Vector{Float64}},
+                                                           d["eigendirections"])), (20, 20))
+                spacing = d["spacing"]
+                push!(freqs, d["freq"])
+                push!(spacings, spacing)
+            end
+        end
+    end
+    s_0 = spacings[findall(f -> f == start_freq, freqs)[1]]
+    freqs .-= start_freq
+    spacings = map(x -> x - s_0, spacings)
+    if plotting
+        plot(freqs / 1e9, map(x -> x[1], spacings))
+        plot!(freqs / 1e9, map(x -> x[2], spacings))
+        plot!(freqs / 1e9, map(x -> x[3], spacings))
+        #legend(["1", "2", "3"])
+    end
+
+    fit_params = Vector{Vector{Float64}}()
+    for i in 1:length(spacings[1])
+        fit = curve_fit(fit_function, freqs / 1.e9, map(x -> x[i] * 1e6, spacings),
+                        [i == 2 ? 1 : -1., 2., 10.])
+        push!(fit_params, coef(fit))
+        if plotting
+            plot!(freqs / 1e9, fit_function(freqs / 1.e9, coef(fit)) / 1e6)
+        end
+    end
+    if plotting
+        return plot!()
+    else
+        return s_0, eigendirections, fit_params
+    end
+end
+
+function plot_interactive_movement(start_freq, shift_range, s_0, eigendirections, fit_params)
+    shifted_eout = Dict{Float64, Vector{Float64}}()
+    freq_range = (start_freq + shift_range[1] * 1e9 - 0.5e9):0.004e9:(start_freq + shift_range[end] * 1e9 + 0.5e9)
+    for shift in shift_range
+        optim_params = get_optim_params(start_freq + shift * 1e9, freq_range=freq_range,
+                                       update_itp=false)
+        shift_spacing = Vector{Float64}()
+        for (i, s) in enumerate(s_0)
+            push!(shift_spacing, fit_function(shift, fit_params[i]) * 1e-6 + s)
+        end
+        #display(shift_spacing)
+        spacing = eigendirections[:, 1:length(s_0)] * shift_spacing
+        #display(spacing)
+        eout = calc_eout(optim_params, spacing, fixed_disk=0)
+        shifted_eout[shift] = abs2.(eout[1, 1, :])
+    end
+    @manipulate for shift in shift_range
+        plot(freq_range / 1e9, shifted_eout[shift])
+    end
 end
 
 function plot_diffs(dir)
