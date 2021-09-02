@@ -4,13 +4,13 @@ include("eigendirections.jl")
 
 using BoostFractor
 using Glob
-#using PyPlot
 using Plots
 using Statistics
 using LsqFit
 using Interact
 
-#plotlyjs()
+plotly()
+default(leg=false, titlefont=font(family="sans-serif", pointsize=10), markerstrokecolor=:auto)
 
 n_disk = 20
 n_region = 2 * n_disk + 2
@@ -19,6 +19,7 @@ epsilon = 24
 eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
 
 function plot_dims(dir; area=true)
+    #pyplot()
     freq_center = 22e9
     freq_range = (freq_center - 0.5e9):0.004e9:(freq_center + 0.5e9)
     init_spacings = read_optim_spacing_from_file("results/optim_2.2e10_v1.txt")
@@ -27,9 +28,10 @@ function plot_dims(dir; area=true)
                                   distances, eps)
     cost_0 = calc_real_bf_cost(optim_params, zeros(n_disk), fixed_disk=0, area=area)
     cost_0 = -convert(Float64, cost_0) / 50e6
-    _, ax1 = subplots()
-    ax2 = ax1.twinx()
-    ax1.plot([1, 20], [cost_0, cost_0])
+    ax1 = plot(ylabel="Boostfactor Magnitude", xlabel="Dimensions", xlims=(0.5, 20.5),
+               xticks=1:20, leg=:bottomright)
+    ax2 = plot(ylabel="Time [s]", xlabel="Dimensions", xlims=(0.5, 20.5), xticks=1:20,
+               leg=:topleft)
 
     l = ["Reference"]
     x = Dict{Int, Vector{Int}}()
@@ -72,24 +74,25 @@ function plot_dims(dir; area=true)
         push!(time_n, mean(times))
         push!(time_err_n, std(times))
     end
-    ax2.plot([], [])
-    for (n, x_n) in x
+    ns = sort(collect(keys(x)), rev=true)
+    for n in ns
         push!(l, "n=$n")
-        p = sortperm(x_n)
-        x_n = x_n[p]
+        p = sortperm(x[n])
+        x_n = x[n][p]
         y_n = y[n][p]
         time_n = time[n][p]
         yerr_n = yerr[n][p]
         time_err_n = time_err[n][p]
-        ax1.errorbar(x_n, y_n, yerr=yerr_n)
-        ax2.errorbar(x_n, time_n, yerr=time_err_n, ls="-.")
+        plot!(ax1, x_n[2:end], y_n[2:end], yerror=yerr_n[2:end], label="n=$n",
+              markerstrokecolor=:auto)
+        plot!(ax2, x_n[2:end], time_n[2:end], yerror=time_err_n[2:end], label="n=$n",
+              markerstrokecolor=:auto)
+        plot!(ax1, [1, 10, 20], [y_n[1], y_n[1], y_n[1]], yerror=[0, yerr_n[1], 0],
+              label="Ref n=$n")
+        plot!(ax2, [1, 10, 20], [time_n[1], time_n[1], time_n[1]], yerror=[0, time_err_n[1], 0],
+              label="Ref n=$n")
     end
-    ax1.set_xlabel("Dimensions")
-    ax1.set_ylabel("Boostfactor magnitude")
-    ax2.set_ylabel("Time [s]")
-    xticks(1:20)
-    grid()
-    ax1.legend(l, bbox_to_anchor=(1.1, 1.01))
+    map(display, [ax1, ax2])
 end
 
 function plot_freq_scan(start_freq, dir; area=true)
@@ -116,10 +119,8 @@ function plot_freq_scan(start_freq, dir; area=true)
             end
         end
     end
-    plot(x, y)
-    plot(x_ref, y_ref)
-    legend(["Fixed eigendirections", "reference"])
-    legend("Boostfactor magnitude")
+    plot(x, y, leg=true, ylabel="Boostfactor magnitude", label="Fixed eigendirections")
+    plot!(x_ref, y_ref, label="Reference")
 end
 
 @. fit_function(x, p) = p[1] * (x - p[2])^2 + p[3]
@@ -144,10 +145,9 @@ function plot_eigendirections_scan(start_freq, dir; plotting=true)
     freqs .-= start_freq
     spacings = map(x -> x - s_0, spacings)
     if plotting
-        plot(freqs / 1e9, map(x -> x[1], spacings))
-        plot!(freqs / 1e9, map(x -> x[2], spacings))
-        plot!(freqs / 1e9, map(x -> x[3], spacings))
-        #legend(["1", "2", "3"])
+        plot(freqs / 1e9, map(x -> x[1], spacings), leg=:outerright, label="Ed 1")
+        plot!(freqs / 1e9, map(x -> x[2], spacings), label="Ed 2")
+        plot!(freqs / 1e9, map(x -> x[3], spacings), label="Ed 3")
     end
 
     fit_params = Vector{Vector{Float64}}()
@@ -156,7 +156,7 @@ function plot_eigendirections_scan(start_freq, dir; plotting=true)
                         [i == 2 ? 1 : -1., 2., 10.])
         push!(fit_params, coef(fit))
         if plotting
-            plot!(freqs / 1e9, fit_function(freqs / 1.e9, coef(fit)) / 1e6)
+            plot!(freqs / 1e9, fit_function(freqs / 1.e9, coef(fit)) / 1e6, label="Fit $i")
         end
     end
     if plotting
@@ -176,53 +176,38 @@ function plot_interactive_movement(start_freq, shift_range, s_0, eigendirections
         for (i, s) in enumerate(s_0)
             push!(shift_spacing, fit_function(shift, fit_params[i]) * 1e-6 + s)
         end
-        #display(shift_spacing)
         spacing = eigendirections[:, 1:length(s_0)] * shift_spacing
-        #display(spacing)
         eout = calc_eout(optim_params, spacing, fixed_disk=0)
         shifted_eout[shift] = abs2.(eout[1, 1, :])
     end
     @manipulate for shift in shift_range
-        plot(freq_range / 1e9, shifted_eout[shift])
+        vbox(plot(freq_range / 1e9, shifted_eout[shift], ylims=(0, 5e4)))
     end
 end
 
 function plot_diffs(dir)
-    legend_text = []
+    plot(leg=true)
     for json in glob("diffs_*.json", dir)
         println("Found file $json")
         data = read_json(json)
         x = data["M_range"]
         y = data["mean"]
-        error = data["variance"]
-        title("Eigenvalue differences at $(data["freq"])")
-        ylabel("Difference")
-        xlabel("M")
-        errorbar(x, y, yerr=error)
-        push!(legend_text, data["variation"])
+        error = sqrt.(data["variance"])
+        plot!(x, y, yerror=error, xlabel="M", ylabel="Difference",
+              title="Eigenvalue differences at $(data["freq"])", label=data["variation"])
     end
-    legend(legend_text)
+    plot!()
 end
 
 function plot_eigendirections(freq, n)
     eigenvalues, eigendirections = calc_eigendirections(freq)
-    figure().set_size_inches(12, cld(n, 3) * 3)
-    subplot(cld(n, 3), 3, 1)
-    bar(collect(1:20), eigenvalues ./ sum(eigenvalues))
-    xlabel("i")
-    ylabel("\$\\lambda_i \$")
-    yscale("log")
-    title("Eigenvalues")
-
+    bar(collect(1:20), eigenvalues ./ sum(eigenvalues), layout=(cld(n+1, 2), 2), subplot=1,
+        size=(600, cld(n, 3) * 250), xlabel="\$i\$", ylabel="\$\\lambda_i \$", yscale=:log10,
+        title="Eigenvalues")
     for i = 1:n
-        subplot(cld(n, 3), 3, i+1)
-        bar(collect(1:20),eigendirections[:,i])
-        xlabel("\$i\$")
-        ylabel("\$\\d_i \$")
-        ylim(-0.6, 0.6)
-        title("Eigendirection $i")
+        bar!(collect(1:20),eigendirections[:,i], subplot=i+1,
+             xlabel="\$i\$", ylabel="\$d_i \$", ylims=(-0.6, 0.6), title="Eigendirection $i")
     end
 
-    tight_layout()
+    plot!()
 end
-
