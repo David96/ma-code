@@ -279,14 +279,6 @@ function plot_sensitivity(;area=false)
     #ax.legend(["Sensitivity"], loc=0)
 end
 
-function get_phase_depth(f, eps=24, d=1e-3)
-    2π * f * d * sqrt(eps) / 3e8
-end
-
-function get_freq(phase_depth, eps=24, d=1e-3)
-    phase_depth * 3e8 / (2π * d * sqrt(eps))
-end
-
 """
     Plot the fields inside the system for a 1D calculation
 """

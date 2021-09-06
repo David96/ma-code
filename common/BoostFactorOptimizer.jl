@@ -280,3 +280,12 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false)
                                diskR=p.diskR, prop=p.prop)
     end
 end
+
+
+function get_phase_depth(f, eps=24, d=1e-3)
+    2π * f * d * sqrt(eps) / 3e8
+end
+
+function get_freq(phase_depth, eps=24, d=1e-3)
+    phase_depth * 3e8 / (2π * d * sqrt(eps))
+end
