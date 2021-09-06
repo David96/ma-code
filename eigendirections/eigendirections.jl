@@ -79,14 +79,15 @@ end
         init_spacing = 0.0
         distances = distances_from_spacing(init_spacing, n_region)
         optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, 50e6, freq_range,
-                                      distances, eps, update_itp=update_itp)
+                                      distances, eps, update_itp=false)
         if isfile("results/init_$(freq).txt")
             init_spacing = read_init_spacing_from_file("results/init_$(freq).txt")
         else
             init_spacing = get_init_spacings(optim_params)
             write_init_spacing_to_file(init_spacing, freq)
         end
-        update_distances(optim_params, distances_from_spacing(init_spacing, n_region))
+        update_distances(optim_params, distances_from_spacing(init_spacing, n_region),
+                         update_itp=update_itp)
         return optim_params
     end
 
