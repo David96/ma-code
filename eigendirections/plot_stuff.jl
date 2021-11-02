@@ -18,16 +18,12 @@ epsilon = 24
 
 eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
 
-function plot_dims(dir; area=true)
+function json_to_ed(json)
+    reshape(reduce(vcat, convert(Vector{Vector{Float64}}, json)), (20, 20))
+end
+
+function plot_dims(dir, freq; area=true)
     #pyplot()
-    freq_center = 22e9
-    freq_range = (freq_center - 0.5e9):0.004e9:(freq_center + 0.5e9)
-    init_spacings = read_optim_spacing_from_file("results/optim_2.2e10_v1.txt")
-    distances = distances_from_spacing(init_spacings)
-    optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq_center, 50e6, freq_range,
-                                  distances, eps)
-    cost_0 = calc_real_bf_cost(optim_params, zeros(n_disk), fixed_disk=0, area=area)
-    cost_0 = -convert(Float64, cost_0) / 50e6
     ax1 = plot(ylabel="Boostfactor Magnitude", xlabel="Dimensions", xlims=(0.5, 20.5),
                xticks=1:20, leg=:bottomright)
     ax2 = plot(ylabel="Time [s]", xlabel="Dimensions", xlims=(0.5, 20.5), xticks=1:20,
@@ -56,7 +52,7 @@ function plot_dims(dir; area=true)
         push!(x_n, data[1]["n_dim"])
         costs = Vector{Float64}()
         times = Vector{Float64}()
-        init_spacing = read_init_spacing_from_file("results/init_2.2e10.txt")
+        init_spacing = read_init_spacing_from_file("results/init_$(freq).txt")
         freq = data[1]["freq"]
         f_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9)
         distances = distances_from_spacing(init_spacing, n_region)
@@ -64,6 +60,10 @@ function plot_dims(dir; area=true)
                                       distances, eps)
         for d in data
             spacings = convert(Vector{Float64}, d["spacing"])
+            if haskey(d, "eigendirections") && d["n_dim"] > 0
+                eigendirections = json_to_ed(d["eigendirections"])
+                spacings = eigendirections[:, 1:d["n_dim"]] * spacings
+            end
             cost_0 = calc_real_bf_cost(p, spacings, fixed_disk=0, area=area)
             cost_0 = -cost_0 / 50e6
             push!(costs, cost_0)
@@ -105,8 +105,7 @@ function plot_freq_scan(start_freq, dir; area=true)
         for d in data
             # The 20x20 Matrix is saved as a Vector{Vector{Any}} in JSON…
             # There might be easier ways of doing this.
-            eigendirections = reshape(reduce(vcat, convert(Vector{Vector{Float64}},
-                                                           d["eigendirections"])), (20, 20))
+            eigendirections = json_to_ed(d["eigendirections"])
             spacing = eigendirections[:, 1:d["n_dim"]] * d["spacing"]
             optim_params = get_optim_params(d["freq"])
             cost = -calc_real_bf_cost(optim_params, spacing, fixed_disk=0, area=area)
@@ -125,58 +124,96 @@ end
 
 @. fit_function(x, p) = p[1] * (x - p[2])^2 + p[3]
 
-function plot_eigendirections_scan(start_freq, dir; plotting=true)
-    freqs = Vector{Int}()
-    spacings = Vector{Vector{Float64}}()
-    eigendirections = nothing
-    for json in glob("spacings_*.json", dir)
-        data = read_json(json)
-        for d in data
-            if !haskey(d, "ref") || d["ref"] == false
-                eigendirections = reshape(reduce(vcat, convert(Vector{Vector{Float64}},
-                                                           d["eigendirections"])), (20, 20))
-                spacing = d["spacing"]
-                push!(freqs, d["freq"])
-                push!(spacings, spacing)
-            end
-        end
-    end
-    s_0 = spacings[findall(f -> f == start_freq, freqs)[1]]
-    freqs .-= start_freq
-    spacings = map(x -> x - s_0, spacings)
-    if plotting
-        plot(freqs / 1e9, map(x -> x[1], spacings), leg=:outerright, label="Ed 1")
-        plot!(freqs / 1e9, map(x -> x[2], spacings), label="Ed 2")
-        plot!(freqs / 1e9, map(x -> x[3], spacings), label="Ed 3")
+function plot_eigendirections_fit(start_freq, dir="results_shift")
+    data = read_json("$dir/shift_fit_$start_freq.json")
+    spacings = convert(Vector{Vector{Float64}}, data["spacings"])
+    #eigendirections = reshape(reduce(vcat, convert(Vector{Vector{Float64}},
+    #                                               data["eigendirections"])), (20, 20))
+    #s_0 = convert(Vector{Float64}, data["s_0"])
+    freqs = -1.7e9:0.1e9:2e9
+    spacings = spacings[length(spacings) - length(freqs) + 1:end]
+    plot(leg=:outerright)
+    for i in 1:data["n_dim"]
+        plot!(freqs / 1e9, map(x -> x[i], spacings), label="Ed $i")
     end
 
     fit_params = Vector{Vector{Float64}}()
-    for i in 1:length(spacings[1])
+    for i in 1:data["n_dim"]
         fit = curve_fit(fit_function, freqs / 1.e9, map(x -> x[i] * 1e6, spacings),
-                        [i == 2 ? 1 : -1., 2., 10.])
+                        [i in [4, 5] ? 3 : 1.5, 1., 3.])
+        plot!(freqs / 1e9, fit_function(freqs / 1.e9, coef(fit)) / 1e6, label="Fit $i")
         push!(fit_params, coef(fit))
-        if plotting
-            plot!(freqs / 1e9, fit_function(freqs / 1.e9, coef(fit)) / 1e6, label="Fit $i")
-        end
     end
-    if plotting
-        return plot!()
-    else
-        return s_0, eigendirections, fit_params
-    end
+    println(fit_params)
+    return plot!()
 end
 
-function plot_interactive_movement(start_freq, shift_range, s_0, eigendirections, fit_params)
+function plot_fit_vs_opt(start_freq, fit_params, dir="results_shift"; area=true, plot_bf_at=-1)
+    ref = read_json("$dir/spacings_ref_n=128_n-dim=5.json")
+    fit = read_json("$dir/shift_fit_2.2e10.json")
+
+    n_dim = ref[1]["n_dim"]
+    ref_0 = ref[findall(r -> r["freq"] == start_freq, ref)[1]]
+    s_0 = convert(Vector{Float64}, ref_0["spacing"])
+    eigendirections_fit = json_to_ed(fit["eigendirections"])
+    eigendirections_0 = json_to_ed(ref_0["eigendirections"])
+    #p_0 = get_optim_params(start_freq)
+
+    costs_ref = Vector{Float64}()
+    costs_fit = Vector{Float64}()
+    freqs = Vector{Float64}()
+    for r in ref
+        freq = r["freq"]
+        eigendirections = json_to_ed(r["eigendirections"])
+        spacing_ref = convert(Vector{Float64}, r["spacing"])
+        p = get_optim_params(freq)
+        cost_ref = -calc_real_bf_cost(p, eigendirections[:, 1:n_dim] * spacing_ref, area=area) / (area ? 50e6 : 1)
+
+        shift_spacing = Vector{Float64}()
+        for i in 1:length(fit_params)
+            push!(shift_spacing, fit_function((freq - start_freq) / 1e9, fit_params[i]) * 1e-6)
+        end
+        spacing = eigendirections_fit[:, 1:length(fit_params)] * shift_spacing
+        spacing += eigendirections_0[:, 1:length(s_0)] * s_0
+
+        if freq == start_freq
+            println("Shift spacing: $shift_spacing")
+        end
+
+        cost_fit = -calc_real_bf_cost(p, spacing, area=area) / (area ? 50e6 : 1)
+
+        push!(costs_ref, cost_ref)
+        push!(costs_fit, cost_fit)
+        push!(freqs, freq)
+
+        if plot_bf_at == freq
+            eout_ref = calc_eout(p, eigendirections[:, 1:n_dim] * spacing_ref)
+            eout_fit = calc_eout(p, spacing)
+            p1 = plot(p.freq_range / 1e9, abs2.(eout_ref[1, 1, :]), label="Ref", leg=:topright)
+            plot!(p1, p.freq_range / 1e9, abs2.(eout_fit[1, 1, :]), label="Fit")
+            display(p1)
+        end
+    end
+    p = sortperm(freqs)
+    freqs = freqs[p]
+    costs_ref = costs_ref[p]
+    costs_fit = costs_fit[p]
+    plot(freqs / 1e9, [costs_ref costs_fit], label=["Ref" "Fit"], leg=:outerright)
+end
+
+function plot_interactive_movement(start_freq, shift_range, s_0, eigendirections_0, 
+        eigendirections_fit, fit_params)
     shifted_eout = Dict{Float64, Vector{Float64}}()
     freq_range = (start_freq + shift_range[1] * 1e9 - 0.5e9):0.004e9:(start_freq + shift_range[end] * 1e9 + 0.5e9)
     for shift in shift_range
         optim_params = get_optim_params(start_freq + shift * 1e9, freq_range=freq_range,
                                        update_itp=false)
         shift_spacing = Vector{Float64}()
-        for (i, s) in enumerate(s_0)
-            push!(shift_spacing, fit_function(shift, fit_params[i]) * 1e-6 + s)
+        for i in 1:length(fit_params)
+            push!(shift_spacing, fit_function(shift, fit_params[i]) * 1e-6)
         end
-        spacing = eigendirections[:, 1:length(s_0)] * shift_spacing
+        spacing = eigendirections_fit[:, 1:length(fit_params)] * shift_spacing
+        spacing += eigendirections_0[:, 1:length(s_0)] * s_0
         eout = calc_eout(optim_params, spacing, fixed_disk=0)
         shifted_eout[shift] = abs2.(eout[1, 1, :])
     end
@@ -199,15 +236,31 @@ function plot_diffs(dir)
     plot!()
 end
 
-function plot_eigendirections(freq, n)
-    eigenvalues, eigendirections = calc_eigendirections(freq)
-    bar(collect(1:20), eigenvalues ./ sum(eigenvalues), layout=(cld(n+1, 2), 2), subplot=1,
+function plot_eigendirections(freq, n; cost_fun=nothing,
+        ev_ed = calc_eigendirections(freq, cost_fun=cost_fun, variation=50e-6, M=3000))
+    ev = ev_ed[1]
+    ed = ev_ed[2]
+    #display(eigenvalues)
+    #display(eigendirections)
+    bar(collect(1:20), ev./ sum(ev),
+        layout=(cld(n+1, 2), 2), subplot=1,
         size=(600, cld(n, 3) * 250), xlabel="\$i\$", ylabel="\$\\lambda_i \$", yscale=:log10,
         title="Eigenvalues")
+    #eigendirections = gen_eigendirections()
     for i = 1:n
-        bar!(collect(1:20),eigendirections[:,i], subplot=i+1,
+        bar!(collect(1:20), ed[:,i], subplot=i+1,
              xlabel="\$i\$", ylabel="\$d_i \$", ylims=(-0.6, 0.6), title="Eigendirection $i")
     end
 
     plot!()
+end
+
+function plot_ed_scan(file, freq_range)
+    data = read_json(file)
+    @manipulate for freq = freq_range
+        i = indexin(freq, freq_range)[1]
+        ev_ed = data[i]
+        ev_ed[2] = json_to_ed(ev_ed[2])
+        plot_eigendirections(freq, 5, ev_ed = ev_ed)
+    end
 end
