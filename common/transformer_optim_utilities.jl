@@ -1,5 +1,5 @@
-
 using BoostFractor
+using Distances
 using Interpolations
 using DSP
 
@@ -103,7 +103,7 @@ function calc_boostfactor_modes(sbdry,coords,modes, frequencies, prop_matrices_s
     # Sweep over frequency
     Threads.@threads for f in 1:n_freq
         boost = transformer(sbdry,coords,modes; prop=prop,diskR=diskR,f=frequencies[f],propagation_matrices=prop_matrices_set[:,f],reflect=nothing)
-        EoutModes0[1,:,f] =  boost
+        EoutModes0[1,:,f] = boost
     end
     return EoutModes0
 end;
@@ -142,20 +142,39 @@ function calc_modes(sbdry,coords,modes, frequencies, prop_matrices_set::Array{Ar
 end;
 
 
-
-function calc_boostfactor_cost(dist_shift::Array{T,1},itp,frequencies,sbdry::SetupBoundaries,coords::CoordinateSystem,modes::Modes,m_reflect;diskR=0.15,prop=propagator) where T<:Real
+function calc_boostfactor_cost(dist_shift::Array{T,1},itp,frequencies,sbdry::SetupBoundaries,
+                coords::CoordinateSystem, modes::Modes, m_reflect; diskR=0.15, prop=propagator,
+                ref=nothing, fix_phase=false,
+                ref_comp=(eout, ref) -> sum(abs2.(eout[2, :, :] - ref))) where T<:Real
     dist_bound_hard = Interpolations.bounds(itp)[3]
     #Return hard penalty when exceeding interpolation bounds
     if any(.!(dist_bound_hard[1] .< dist_shift .< dist_bound_hard[2])) 
-        return 1000.0
+        return 1001.0
     end
     #Add soft penalty when approaching interpolation bounds
     penalty = soft_box_penalty(dist_shift,dist_bound_hard)
 
     prop_matrices_set_interp = interpolate_prop_matrix(itp,dist_shift);
-    Eout = calc_boostfactor_modes(sbdry,coords,modes,frequencies,prop_matrices_set_interp,diskR=diskR,prop=prop)
-    cpld_pwr = abs2.(sum(conj.(Eout[1,:,:]).*m_reflect, dims=1)[1,:])
-    cost =  -p_norm(cpld_pwr,-20)*penalty
+    if ref === nothing
+        Eout = calc_boostfactor_modes(sbdry,coords,modes,frequencies,prop_matrices_set_interp,diskR=diskR,prop=prop)
+        cpld_pwr = abs2.(sum(conj.(Eout[1,:,:]).*m_reflect, dims=1)[1,:])
+        cost =  -p_norm(cpld_pwr,-20)*penalty
+    elseif ref !== nothing
+        if fix_phase
+            # Set antenna spacing to minus the sum of disk spacings to remove additional phase
+            # factor. Only works for 1D!
+            @assert modes.mode_kt == Array{Complex{Float64}}(zeros(1,1)) # true for 1D
+
+            if typeof(dist_shift[1]) == Float64
+                sbdry.distance[end] = - sum(dist_shift)
+            else
+                sbdry.distance[end] = - sum(map(x -> x.value, dist_shift))
+            end
+        end
+        Eout = calc_modes(sbdry,coords,modes,frequencies,prop_matrices_set_interp, m_reflect,
+                                      diskR=diskR,prop=prop)
+        cost = ref_comp(Eout, ref)
+    end
     return cost
 end;
 

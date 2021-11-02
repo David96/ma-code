@@ -1,8 +1,8 @@
 using Distributed, ClusterManagers, Glob
 
 if haskey(ENV, "SLURM_AVAILABLE") && ENV["SLURM_AVAILABLE"] == "true"
-    addprocs(SlurmManager(50), partition="maxwell", t="02:00:00", nodes="2-6", kill_on_bad_exit="1",
-             cpus_per_task="8")
+    addprocs(SlurmManager(50, Iterators.repeated(0.1)), partition="maxwell", t="02:00:00",
+             nodes="2-6", kill_on_bad_exit="1", cpus_per_task="4")
 end
 
 @everywhere begin
@@ -11,6 +11,7 @@ end
     using ForwardDiff
     using LinearAlgebra
     using Statistics
+    using LsqFit
 
     include("../common/BoostFactorOptimizer.jl")
     include("../common/FileUtils.jl")
@@ -20,9 +21,13 @@ end
     epsilon = 24
 
     #Gradient of cost function
-    function grad_cost_fun(x, p::BoosterParams)
-        #ForwardDiff.gradient(cost_fun(p, 0), x)
-        cost_fun(p, 0, gradient=true)(x)
+    function grad_cost_fun(x, p::BoosterParams; cost=nothing)
+        if cost !== nothing
+            ForwardDiff.gradient(cost, x)
+        else
+            #ForwardDiff.gradient(cost_fun(p, 0), x)
+            cost_fun(p, 0, gradient=true)(x)
+        end
     end
 
     function contains_nan_or_inf(C)
@@ -39,14 +44,18 @@ end
     # M = Number of samples.
     # Takes a lot to converge but this might not be important as different eigendirections
     # seem to work equally well
-    function calc_C_matrix(x_0, p::BoosterParams; M=1000, variation = 100e-6)
+    function calc_C_matrix(x_0, p::BoosterParams; M=1000, variation = 100e-6, cost_fun=nothing)
         while true
             C_matrix = zeros(n_disk, n_disk)
 
             for i=1:M
                 x_i = x_0 .+ 2 .* (rand(n_disk).-0.5) .* variation
-                _, grad = grad_cost_fun(x_i, p)
-                grad = grad[1:n_disk] # remove the last entry corresponding to the gap between last disk and antenna
+                if cost_fun !== nothing
+                    grad = grad_cost_fun(x_i, p, cost=cost_fun)
+                else
+                    _, grad = grad_cost_fun(x_i, p)
+                    grad = grad[1:n_disk] # remove the last entry corresponding to the gap between last disk and antenna
+                end
                 C_matrix += (grad / M) .* transpose(grad)
             end
             if !contains_nan_or_inf(C_matrix)
@@ -55,47 +64,11 @@ end
         end
     end
 
-    function get_init_spacings(optim_params::BoosterParams)
-        best_spacing = 0.0
-        best_boost = 0.0
-        for i in 0.005:0.000001:0.015
-            optim_params.sbdry_init.distance = distances_from_spacing(i, n_region)
-
-            boost_factor = abs2(transformer(optim_params.sbdry_init, optim_params.coords,
-                                            optim_params.modes, prop=propagator1D,
-                                            reflect=nothing, f=optim_params.freq_center,
-                                            diskR=optim_params.diskR)[1])
-            if boost_factor > best_boost
-                best_boost = boost_factor
-                best_spacing = i
-            end
-        end
-        return best_spacing
-    end
-
-    function get_optim_params(freq; freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9),
-                              update_itp=true)
-        eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
-        init_spacing = 0.0
-        distances = distances_from_spacing(init_spacing, n_region)
-        optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, 50e6, freq_range,
-                                      distances, eps, update_itp=false)
-        if isfile("results/init_$(freq).txt")
-            init_spacing = read_init_spacing_from_file("results/init_$(freq).txt")
-        else
-            init_spacing = get_init_spacings(optim_params)
-            write_init_spacing_to_file(init_spacing, freq)
-        end
-        update_distances(optim_params, distances_from_spacing(init_spacing, n_region),
-                         update_itp=update_itp)
-        return optim_params
-    end
-
-    function calc_eigendirections(freq; M=2000, variation = 60e-6)
-        optim_params = get_optim_params(freq)
-
+    function calc_eigendirections(freq, optim_params = get_optim_params(freq);
+            M=2000, variation = 50e-6, cost_fun=nothing)
         #Eigenvalue decomposition
-        C_matrix = calc_C_matrix(zeros(n_disk), optim_params, M=M, variation=variation)
+        C_matrix = calc_C_matrix(zeros(n_disk), optim_params, M=M, variation=variation,
+                                 cost_fun=cost_fun)
         eigen_decomp = eigen(C_matrix)
         eigenvalues = eigen_decomp.values
         eigendirections = eigen_decomp.vectors
@@ -107,19 +80,35 @@ end
         return eigenvalues, eigendirections
     end
 
-    function optimize_bf_with_eigendirections(freq; M=2000, variation=60e-6, n=1024, n_dim=5,
-            eigendirections=nothing)
+    oscillate(order, n, i) = sin(i * order * pi / n) * 2 * pi / n
+
+    function gen_eigendirection(order)
+        [oscillate(order, n_disk, i) for i in 1:n_disk]
+    end
+
+    function gen_eigendirections()
+        hcat([gen_eigendirection(order) for order in 1:n_disk]...)
+    end
+
+    function optimize_bf_with_eigendirections(freq, optim_params = get_optim_params(freq);
+            M=2000, variation=60e-6, n=1024, n_dim=5, eigendirections=nothing, 
+            starting_point=zeros(n_dim), kwargs...)
         if eigendirections === nothing && n_dim > 0
-            eigenvalues, eigendirections = calc_eigendirections(freq, M=M, variation=variation)
+            eigenvalues, eigendirections = calc_eigendirections(freq, M=M, variation=variation,
+                                                               cost_fun=cost_fun(optim_params,
+                                                                                 0; kwargs...))
         end
-        optim_params = get_optim_params(freq)
         if n_dim == 0
             time = @elapsed optim_spacings =
-                                optimize_spacings(optim_params, 0, n=n)
+                                optimize_spacings(optim_params, 0, n=n,
+                                                  cost_function=cost_fun(optim_params, 0;
+                                                                         kwargs...))
         else
             time = @elapsed optim_spacings =
-                                optimize_spacings(optim_params, 0, n=n, starting_point=zeros(n_dim),
-                                            cost_function=cost_fun_rot(optim_params, eigendirections))
+                                optimize_spacings(optim_params, 0, n=n,
+                                                  starting_point=starting_point,
+                                            cost_function=cost_fun_rot(optim_params,
+                                                            eigendirections; kwargs...))
             # optim_spacings = eigendirections[:,1:length(optim_spacings)] * optim_spacings
         end
         time, optim_spacings
@@ -167,14 +156,15 @@ function optimize_freq_range(freq_range; M=2000, variation=60e-6, n=1024, n_dim=
 end
 
 function optimize_dim_range(freq, dim_range; M=2000, variation=60e-6, n=1024, rep=100)
-    _, eigendirections = calc_eigendirections(freq, M=M, variation=variation)
     for n_dim in dim_range
         reps = @distributed (vcat) for i in 1:rep
+            _, eigendirections = calc_eigendirections(freq, M=M, variation=variation)
             time, optim_spacings = optimize_bf_with_eigendirections(freq, M=M, variation=variation,
                                                                     n=n, n_dim=n_dim,
                                                                     eigendirections=eigendirections)
             Dict(:freq => freq, :M => M, :variation => variation, :n_dim => n_dim, :n => n,
-                        :time => time, :spacing => optim_spacings)
+                        :time => time, :spacing => optim_spacings,
+                        :eigendirections => eigendirections)
         end
         write_json("spacings_n=$(n)_n-dim=$(n_dim).json", reps)
     end
@@ -200,6 +190,68 @@ function scan_freq_range(start_freq, freq_range; M=2000, variation=60e-6, n=128,
         write_json("$dir/spacings_n=$(n)_n-dim=$(n_dim).json", freqs)
     end
 end
+
+@. fit_function(x, p) = p[1] * (x - p[2])^2 + p[3]
+
+function shift_bf(start_freq; n_dim=3, dir="results_shift")
+    freqs = Vector{Int}()
+    spacings = Vector{Vector{Float64}}()
+    _, ed_tmp= calc_eigendirections(start_freq, variation=50e-6)
+    p = get_optim_params(22e9)
+    _, spacing = optimize_bf_with_eigendirections(22e9, p, n_dim=n_dim,
+                                                   eigendirections=ed_tmp, n=64)
+    p.sbdry_init.distance[2:2:end-2] .+= ed_tmp[:, 1:n_dim] * spacing
+
+    _, eigendirections = calc_eigendirections(22e9, p, cost_fun=cost_fun(p, 0))
+#    n_dim = n_dim + 1
+#    eigendirections[:, n_dim] = fill(1 / n_disk, n_disk)
+#    init_spacing_0 = get_init_spacings(start_freq)
+#    optim_params = get_optim_params(start_freq)
+    for freq in (start_freq - 2e9):0.1e9:(start_freq + 2e9)
+        optim_params = get_optim_params(freq)
+        update_freq_center(optim_params, freq)
+        init_spacing = get_init_spacings(freq)
+
+        # Try our best to remove the dependence on init_spacings
+#        init_diff = (init_spacing - init_spacing_0) * n_disk
+        #init_rot = inv(eigendirections)[1:n_dim, :] * fill(init_diff, n_disk)
+#        println("Init diff: $init_diff")
+
+        _, spacing = optimize_bf_with_eigendirections(freq, optim_params, n_dim=n_dim,
+#                                                      starting_point=vcat(fill(0., n_dim - 1),
+#                                                                          init_diff),
+                                                      eigendirections=eigendirections, n=64)
+
+
+        push!(freqs, freq)
+        push!(spacings, spacing)
+    end
+    s_0 = spacings[findall(f -> f == start_freq, freqs)[1]]
+    freqs .-= start_freq
+    spacings = map(x -> x - s_0, spacings)
+
+    #fit_params = Vector{Vector{Float64}}()
+    #for i in 1:n_dim
+    #    fit = curve_fit(fit_function, freqs / 1.e9, map(x -> x[i] * 1e6, spacings),
+    #                    #[i in [2, 3, 5] ? -1. : 1., 2., 10.])
+    #                    [i in [1, 3, 5] ? -1. : 1., 2., 3.])
+    #    push!(fit_params, coef(fit))
+    #end
+    write_json("$dir/shift_fit_$start_freq.json", Dict("freq" => start_freq, "n_dim" => n_dim,
+                                                       "s_0" => s_0,
+                                                       "freqs" => freqs,
+                                                       "spacings" => spacings,
+ #                                                      "fit_params" => fit_params,
+                                                       "eigendirections" => eigendirections))
+end
+
+function ed_scan(freq_range; dir="results_ed_scan", cost_fun=nothing)
+    eds = @distributed (vcat) for freq in freq_range
+        calc_eigendirections(freq, cost_fun=cost_fun)
+    end
+    write_json("$dir/ed_scan.json", eds)
+end
+
 
 #function update(plt, eigendirections, i)
 #    return frame -> begin

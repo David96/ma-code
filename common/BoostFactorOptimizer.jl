@@ -1,7 +1,7 @@
-using BoostFractor, LineSearches, ForwardDiff, Optim, Base.Threads
+using BoostFractor, LineSearches, ForwardDiff, Optim, Base.Threads, DSP
 
+include("FileUtils.jl")
 include("transformer_optim_utilities.jl") # Bunch of helper functions
-
 
 function distances_from_spacing(init_spacing::Float64, n_region::Int)
     distance = Array{Float64}([i==1 ? 0 : i%2==0 ? init_spacing : 1e-3 for i=1:n_region])
@@ -22,7 +22,7 @@ end
 
 mutable struct BoosterParams
     n_disk::Int
-    epsilon::Float64
+    epsilon::Complex
     diskR::Float64
     Mmax::Int
     Lmax::Int
@@ -39,7 +39,8 @@ mutable struct BoosterParams
     constraints::BoosterConstraints
 end
 
-get_freq_optim(center, width) = range(center - width / 2, stop=center + width / 2, length=8)
+get_freq_optim(center, width; length=32) = range(center - width / 2, stop=center + width / 2,
+                                                length=length)
 
 function init_optimizer(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_width, freq_range,
         distance, eps; three_dims=false, constraints=BoosterConstraints(6e-3, 48e-3, 304e-3),
@@ -77,8 +78,9 @@ function update_itp_sub(p::BoosterParams; range=-2500:50:2500)
     p.itp_sub = construct_prop_matrix_interpolation(prop_matrix_grid_sub, spacing_grid)
 end
 
-function update_freq_center(params::BoosterParams, center::Float64; update_itp=true)
-    params.freq_optim = get_freq_optim(center, params.freq_width)
+function update_freq_center(params::BoosterParams, center = params.freq_center,
+        width = params.freq_width; update_itp=true)
+    params.freq_optim = get_freq_optim(center, width)
     if update_itp
         update_itp_sub(params)
     end
@@ -108,7 +110,7 @@ function get_penalty(disk1, disk2, p, x, dist; is_min_dist=true)
     return 0
 end
 
-function apply_constraints(p::BoosterParams, x)
+function apply_constraints(p::BoosterParams, x; debug=false)
     penalty = 0.
     # Disks are additionally constraint because every 8th disk is on the same rail.
     # Also, two disks have a minimum distance and the booster has a fixed length
@@ -116,8 +118,13 @@ function apply_constraints(p::BoosterParams, x)
         p1 = d <= p.n_disk - 8 ?
                 get_penalty(d, d + 8, p, x, p.constraints.min_dist_8_disks) : 0
         p2 = get_penalty(d, d + 1, p, x, p.constraints.min_dist_2_disks)
-        #println("Applying penalty of $(p1 + p2)")
+        if debug
+            println("Applying penalty of $(p1 + p2)")
+        end
         if p1 == Inf || p2 == Inf
+            if debug
+                println("$(p1 == Inf ? "8th" : "2nd") disk constraint")
+            end
             return Inf
         else
             penalty += p1 + p2
@@ -126,6 +133,9 @@ function apply_constraints(p::BoosterParams, x)
     p_length = get_penalty(1, p.n_disk, p, x, p.constraints.max_dist_all_disks,
                            is_min_dist=false)
     if p_length == Inf
+        if debug
+            println("Booster length constraint")
+        end
         return Inf
     else
         penalty += p_length
@@ -133,7 +143,8 @@ function apply_constraints(p::BoosterParams, x)
     return penalty
 end
 
-function cost_fun(p::BoosterParams, fixed_disk; gradient=false)
+function cost_fun(p::BoosterParams, fixed_disk; gradient=false, disable_constraints=false,
+                  kwargs...)
     return x -> begin
         penalty = 0.
         # if one disk is fixed, insert it into dist_shift as the optimizer then runs on one
@@ -149,24 +160,25 @@ function cost_fun(p::BoosterParams, fixed_disk; gradient=false)
             x = vcat(x[1:fixed_disk - 1], rel_pos, x[fixed_disk:length(x)])
         end
 
-        penalty = apply_constraints(p, x)
+        penalty = disable_constraints ? 0. : apply_constraints(p, x)
         if penalty == Inf
             return 1000.
         end
 
         if gradient
-            cost, grad = calc_boostfactor_cost_gradient(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords,
-                                  p.modes, p.m_reflect, diskR=p.diskR, prop=p.prop)
+            cost, grad = calc_boostfactor_cost_gradient(x, p.itp_sub, p.freq_optim, p.sbdry_init,
+                                                        p.coords, p.modes, p.m_reflect,
+                                                        diskR=p.diskR, prop=p.prop)
             cost + penalty, grad
         else
-            calc_boostfactor_cost(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords,
-                                  p.modes, p.m_reflect, diskR=p.diskR, prop=p.prop) + penalty
+            calc_boostfactor_cost(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords, p.modes,
+                                  p.m_reflect; diskR=p.diskR, prop=p.prop, kwargs...) + penalty
         end
     end
 end
 
-function cost_fun_rot(p::BoosterParams, eigendirections)
-    cf = cost_fun(p, 0)
+function cost_fun_rot(p::BoosterParams, eigendirections; kwargs...)
+    cf = cost_fun(p, 0; kwargs...)
     return x -> begin
         x_r = eigendirections[:,1:length(x)] * x
         return cf(x_r)
@@ -184,12 +196,14 @@ end
 algorithms = [BFGS(linesearch = BackTracking(order=2)), LBFGS(linesearch = BackTracking(order=2)),
               GradientDescent(linesearch = BackTracking(order=2)), NelderMead()]
 algorithm = BFGS(linesearch = BackTracking(order=2))
+#algorithm = NelderMead()
 options = Optim.Options(f_tol = 1e-6)
+#options = Optim.Options(iterations=10000)
 
 function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zeros(p.n_disk),
                            cost_function=cost_fun(p, fixed_disk), n=1024)
     spacings = Vector{Float64}()
-    best_cost = Atomic{Float64}(1000.)
+    best_cost = Atomic{Float64}(1002.)
     lk = SpinLock()
     # Run initial optimization a few times and pick the best one
     @threads for i in 1:n
@@ -218,11 +232,11 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zer
         lock(lk)
         atomic_min!(best_cost, cost)
         if atomic_cas!(best_cost, cost, cost) === cost
-            println("Best cost: $cost")
             spacings = Optim.minimizer(res)
         end
         unlock(lk)
     end
+    println("Best cost: $best_cost")
     spacings
 end
 
@@ -249,7 +263,8 @@ function calc_real_bf_cost(p::BoosterParams, spacings; fixed_disk=0, area=true)
     end
 end
 
-function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false)
+function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false,
+        disable_constraints=false)
     if fixed_disk > 0
         spacings = spacings_with_fd(spacings, fixed_disk)
     end
@@ -257,12 +272,12 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false)
     sbdry_optim.distance[2:2:end-2] .+= spacings
 
     # check that disks didn't move past each other
-    if count(x -> x < 0, sbdry_optim.distance) > 0
+    if count(x -> x < 0, sbdry_optim.distance[end - 1]) > 0
         println("We fucked, that's not possible!")
         throw(ArgumentError("Negative relative spacings aren't possible!"))
     end
 
-    if apply_constraints(p, spacings) == Inf
+    if !disable_constraints && apply_constraints(p, spacings) == Inf
         throw(ArgumentError("Spacings don't fullfill constraints!"))
     end
 
@@ -282,10 +297,58 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false)
 end
 
 
-function get_phase_depth(f, eps=24, d=1e-3)
+function get_phase_depth(f; eps=24, d=1e-3)
     2π * f * d * sqrt(eps) / 3e8
 end
 
-function get_freq(phase_depth, eps=24, d=1e-3)
+function get_freq(phase_depth; eps=24, d=1e-3)
     phase_depth * 3e8 / (2π * d * sqrt(eps))
+end
+
+function get_init_spacings(freq, freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9),
+                           epsilon=24, n_disk=20)
+    if epsilon == 24 && n_disk == 20
+        p = [0.04323293823102593, 0.11927287669916398, 0.004077191528864808]
+        return p[1] * exp(-p[2] * freq / 1e9) + p[3]
+    end
+    if isfile("results/init_$(freq).txt")
+        return read_init_spacing_from_file("results/init_$(freq).txt")
+    else
+        optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, 50e6, freq_range,
+                                      distances_from_spacing(0.0, 2*n_disk + 2), eps,
+                                      update_itp=false)
+        best_spacing = 0.0
+        best_boost = 0.0
+        for i in 0.005:0.000001:0.015
+            optim_params.sbdry_init.distance = distances_from_spacing(i, n_region)
+
+            boost_factor = abs2(transformer(optim_params.sbdry_init, optim_params.coords,
+                                            optim_params.modes, prop=propagator1D,
+                                            reflect=nothing, f=optim_params.freq_center,
+                                            diskR=optim_params.diskR)[1])
+            if boost_factor > best_boost
+                best_boost = boost_factor
+                best_spacing = i
+            end
+        end
+        write_init_spacing_to_file(best_spacing, freq)
+        return best_spacing
+    end
+end
+
+function get_optim_params(freq; freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9),
+                          update_itp=true, epsilon=24, n_disk=20, freq_width=50e6)
+
+    eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
+    init_spacing = get_init_spacings(freq)
+    distances = distances_from_spacing(init_spacing, n_disk * 2 + 2)
+    optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, freq_width, freq_range,
+                                  distances, eps, update_itp=update_itp,
+                                  constraints = BoosterConstraints(0., 0., 100.))
+
+    return optim_params
+end
+
+function group_delay(refl, df)
+    -diff(unwrap(angle.(refl))) ./ (2*pi*df)
 end
