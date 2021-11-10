@@ -13,9 +13,6 @@ end
     using Statistics
     using LsqFit
 
-    include("../common/BoostFactorOptimizer.jl")
-    include("../common/FileUtils.jl")
-
     n_disk = 20
     n_region = 2 * n_disk + 2
     epsilon = 24

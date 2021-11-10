@@ -1,6 +1,3 @@
-include("../common/FileUtils.jl")
-include("../common/BoostFactorOptimizer.jl")
-
 using BoostFractor
 using Glob
 using PyPlot

@@ -1,7 +1,3 @@
-include("../common/FileUtils.jl")
-include("../common/BoostFactorOptimizer.jl")
-include("eigendirections.jl")
-
 using BoostFractor
 using Glob
 using Plots

@@ -1,8 +1,5 @@
 using BoostFractor, LineSearches, ForwardDiff, Optim, Base.Threads, DSP
 
-include("FileUtils.jl")
-include("transformer_optim_utilities.jl") # Bunch of helper functions
-
 function distances_from_spacing(init_spacing::Float64, n_region::Int)
     distance = Array{Float64}([i==1 ? 0 : i%2==0 ? init_spacing : 1e-3 for i=1:n_region])
     distance[end] = 0
@@ -193,15 +190,10 @@ function cost_fun_equidistant(p::BoosterParams)
     end
 end
 
-algorithms = [BFGS(linesearch = BackTracking(order=2)), LBFGS(linesearch = BackTracking(order=2)),
-              GradientDescent(linesearch = BackTracking(order=2)), NelderMead()]
-algorithm = BFGS(linesearch = BackTracking(order=2))
-#algorithm = NelderMead()
-options = Optim.Options(f_tol = 1e-6)
-#options = Optim.Options(iterations=10000)
-
 function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zeros(p.n_disk),
-                           cost_function=cost_fun(p, fixed_disk), n=1024)
+                           cost_function=cost_fun(p, fixed_disk), n=1024,
+                           algorithm=BFGS(linesearch=BackTracking(order=2)),
+                           options=Optim.Options(f_tol=1e-6))
     spacings = Vector{Float64}()
     best_cost = Atomic{Float64}(1002.)
     lk = SpinLock()
