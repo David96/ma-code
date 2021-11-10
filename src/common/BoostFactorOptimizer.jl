@@ -76,8 +76,8 @@ function update_itp_sub(p::BoosterParams; range=-2500:50:2500)
 end
 
 function update_freq_center(params::BoosterParams, center = params.freq_center,
-        width = params.freq_width; update_itp=true)
-    params.freq_optim = get_freq_optim(center, width)
+        width = params.freq_width; update_itp=true, length=32)
+    params.freq_optim = get_freq_optim(center, width, length=length)
     if update_itp
         update_itp_sub(params)
     end
