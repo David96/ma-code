@@ -7,8 +7,6 @@ using LinearAlgebra
 using Statistics
 using LsqFit
 
-n_disk = 20
-n_region = 2 * n_disk + 2
 epsilon = 24
 
 #Gradient of cost function
@@ -37,15 +35,15 @@ end
 # seem to work equally well
 function calc_C_matrix(x_0, p::BoosterParams; M=1000, variation = 100e-6, cost_fun=nothing)
     while true
-        C_matrix = zeros(n_disk, n_disk)
+        C_matrix = zeros(p.n_disk, p.n_disk)
 
         for i=1:M
-            x_i = x_0 .+ 2 .* (rand(n_disk).-0.5) .* variation
+            x_i = x_0 .+ 2 .* (rand(p.n_disk).-0.5) .* variation
             if cost_fun !== nothing
                 grad = grad_cost_fun(x_i, p, cost=cost_fun)
             else
                 _, grad = grad_cost_fun(x_i, p)
-                grad = grad[1:n_disk] # remove the last entry corresponding to the gap between last disk and antenna
+                grad = grad[1:p.n_disk] # remove the last entry corresponding to the gap between last disk and antenna
             end
             C_matrix += (grad / M) .* transpose(grad)
         end
@@ -58,7 +56,7 @@ end
 function calc_eigendirections(freq, optim_params = get_optim_params(freq);
         M=2000, variation = 50e-6, cost_fun=nothing)
     #Eigenvalue decomposition
-    C_matrix = calc_C_matrix(zeros(n_disk), optim_params, M=M, variation=variation,
+    C_matrix = calc_C_matrix(zeros(optim_params.n_disk), optim_params, M=M, variation=variation,
                              cost_fun=cost_fun)
     eigen_decomp = eigen(C_matrix)
     eigenvalues = eigen_decomp.values
@@ -73,11 +71,11 @@ end
 
 oscillate(order, n, i) = sin(i * order * pi / n) * 2 * pi / n
 
-function gen_eigendirection(order)
+function gen_eigendirection(order; n_disk=20)
     [oscillate(order, n_disk, i) for i in 1:n_disk]
 end
 
-function gen_eigendirections()
+function gen_eigendirections(; n_disk=20)
     hcat([gen_eigendirection(order) for order in 1:n_disk]...)
 end
 
