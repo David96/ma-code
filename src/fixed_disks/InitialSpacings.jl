@@ -2,20 +2,19 @@ using Distributed, ClusterManagers
 
 #addprocs(SlurmManager(21), partition="maxwell", t="01:30:00", nodes="2-6")
 
-@everywhere begin
-    include("../common/BoostFactorOptimizer.jl")
-    include("../common/FileUtils.jl")
+include("../common/BoostFactorOptimizer.jl")
+include("../common/FileUtils.jl")
 
-    using BoostFractor
-    using Dates
-    using DelimitedFiles
+using BoostFractor
+using Dates
+using DelimitedFiles
 
-    freq_width= 50e6
+freq_width= 50e6
 
-    epsilon = 24
-    n_disk = 20
-    n_region = 2 * n_disk + 2
-end
+epsilon = 24
+n_disk = 20
+n_region = 2 * n_disk + 2
+
 
 # %%
 f0= 22e9

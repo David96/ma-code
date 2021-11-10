@@ -7,7 +7,7 @@ include("common/BoostFactorOptimizer.jl")
 include("eigendirections/eigendirections.jl")
 include("eigendirections/plot_stuff.jl")
 
-include("fixed_disks/plot_stuff.jl")
+#include("fixed_disks/plot_stuff.jl")
 
 include("ml/neuralnet.jl")
 

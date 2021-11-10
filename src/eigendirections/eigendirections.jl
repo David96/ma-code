@@ -1,122 +1,116 @@
 using Distributed, ClusterManagers, Glob
 
-if haskey(ENV, "SLURM_AVAILABLE") && ENV["SLURM_AVAILABLE"] == "true"
-    addprocs(SlurmManager(50, Iterators.repeated(0.1)), partition="maxwell", t="02:00:00",
-             nodes="2-6", kill_on_bad_exit="1", cpus_per_task="4")
-end
+using BoostFractor
+using Optim
+using ForwardDiff
+using LinearAlgebra
+using Statistics
+using LsqFit
 
-@everywhere begin
-    using BoostFractor
-    using Optim
-    using ForwardDiff
-    using LinearAlgebra
-    using Statistics
-    using LsqFit
+n_disk = 20
+n_region = 2 * n_disk + 2
+epsilon = 24
 
-    n_disk = 20
-    n_region = 2 * n_disk + 2
-    epsilon = 24
-
-    #Gradient of cost function
-    function grad_cost_fun(x, p::BoosterParams; cost=nothing)
-        if cost !== nothing
-            ForwardDiff.gradient(cost, x)
-        else
-            #ForwardDiff.gradient(cost_fun(p, 0), x)
-            cost_fun(p, 0, gradient=true)(x)
-        end
-    end
-
-    function contains_nan_or_inf(C)
-        for c_ij in C
-            if isnan(c_ij) || isinf(c_ij)
-                return true
-            end
-        end
-        return false
-    end
-
-    # Calculates C matrix via Monte Carlos Sampling of cost function gradient around 
-    # disk spacing = initial_spacing + x_0
-    # M = Number of samples.
-    # Takes a lot to converge but this might not be important as different eigendirections
-    # seem to work equally well
-    function calc_C_matrix(x_0, p::BoosterParams; M=1000, variation = 100e-6, cost_fun=nothing)
-        while true
-            C_matrix = zeros(n_disk, n_disk)
-
-            for i=1:M
-                x_i = x_0 .+ 2 .* (rand(n_disk).-0.5) .* variation
-                if cost_fun !== nothing
-                    grad = grad_cost_fun(x_i, p, cost=cost_fun)
-                else
-                    _, grad = grad_cost_fun(x_i, p)
-                    grad = grad[1:n_disk] # remove the last entry corresponding to the gap between last disk and antenna
-                end
-                C_matrix += (grad / M) .* transpose(grad)
-            end
-            if !contains_nan_or_inf(C_matrix)
-                return C_matrix
-            end
-        end
-    end
-
-    function calc_eigendirections(freq, optim_params = get_optim_params(freq);
-            M=2000, variation = 50e-6, cost_fun=nothing)
-        #Eigenvalue decomposition
-        C_matrix = calc_C_matrix(zeros(n_disk), optim_params, M=M, variation=variation,
-                                 cost_fun=cost_fun)
-        eigen_decomp = eigen(C_matrix)
-        eigenvalues = eigen_decomp.values
-        eigendirections = eigen_decomp.vectors
-
-        #Sort by eigenvalues
-        p = sortperm(eigenvalues,rev=true)
-        eigenvalues = eigenvalues[p]
-        eigendirections = eigendirections[:,p]
-        return eigenvalues, eigendirections
-    end
-
-    oscillate(order, n, i) = sin(i * order * pi / n) * 2 * pi / n
-
-    function gen_eigendirection(order)
-        [oscillate(order, n_disk, i) for i in 1:n_disk]
-    end
-
-    function gen_eigendirections()
-        hcat([gen_eigendirection(order) for order in 1:n_disk]...)
-    end
-
-    function optimize_bf_with_eigendirections(freq, optim_params = get_optim_params(freq);
-            M=2000, variation=60e-6, n=1024, n_dim=5, eigendirections=nothing, 
-            starting_point=zeros(n_dim), kwargs...)
-        if eigendirections === nothing && n_dim > 0
-            eigenvalues, eigendirections = calc_eigendirections(freq, M=M, variation=variation,
-                                                               cost_fun=cost_fun(optim_params,
-                                                                                 0; kwargs...))
-        end
-        if n_dim == 0
-            time = @elapsed optim_spacings =
-                                optimize_spacings(optim_params, 0, n=n,
-                                                  cost_function=cost_fun(optim_params, 0;
-                                                                         kwargs...))
-        else
-            time = @elapsed optim_spacings =
-                                optimize_spacings(optim_params, 0, n=n,
-                                                  starting_point=starting_point,
-                                            cost_function=cost_fun_rot(optim_params,
-                                                            eigendirections; kwargs...))
-            # optim_spacings = eigendirections[:,1:length(optim_spacings)] * optim_spacings
-        end
-        time, optim_spacings
-    end
-
-    function save_spacing_to_json(filename, freq, M, variation, n_dim, n, time, spacing)
-        data = Dict(:freq => freq, :M => M, :variation => variation, :n_dim => n_dim, :n => n,
-                    :time => time, :spacing => spacing)
-        write_json("results/$filename", data)
+#Gradient of cost function
+function grad_cost_fun(x, p::BoosterParams; cost=nothing)
+    if cost !== nothing
+        ForwardDiff.gradient(cost, x)
+    else
+        #ForwardDiff.gradient(cost_fun(p, 0), x)
+        cost_fun(p, 0, gradient=true)(x)
     end
 end
+
+function contains_nan_or_inf(C)
+    for c_ij in C
+        if isnan(c_ij) || isinf(c_ij)
+            return true
+        end
+    end
+    return false
+end
+
+# Calculates C matrix via Monte Carlos Sampling of cost function gradient around 
+# disk spacing = initial_spacing + x_0
+# M = Number of samples.
+# Takes a lot to converge but this might not be important as different eigendirections
+# seem to work equally well
+function calc_C_matrix(x_0, p::BoosterParams; M=1000, variation = 100e-6, cost_fun=nothing)
+    while true
+        C_matrix = zeros(n_disk, n_disk)
+
+        for i=1:M
+            x_i = x_0 .+ 2 .* (rand(n_disk).-0.5) .* variation
+            if cost_fun !== nothing
+                grad = grad_cost_fun(x_i, p, cost=cost_fun)
+            else
+                _, grad = grad_cost_fun(x_i, p)
+                grad = grad[1:n_disk] # remove the last entry corresponding to the gap between last disk and antenna
+            end
+            C_matrix += (grad / M) .* transpose(grad)
+        end
+        if !contains_nan_or_inf(C_matrix)
+            return C_matrix
+        end
+    end
+end
+
+function calc_eigendirections(freq, optim_params = get_optim_params(freq);
+        M=2000, variation = 50e-6, cost_fun=nothing)
+    #Eigenvalue decomposition
+    C_matrix = calc_C_matrix(zeros(n_disk), optim_params, M=M, variation=variation,
+                             cost_fun=cost_fun)
+    eigen_decomp = eigen(C_matrix)
+    eigenvalues = eigen_decomp.values
+    eigendirections = eigen_decomp.vectors
+
+    #Sort by eigenvalues
+    p = sortperm(eigenvalues,rev=true)
+    eigenvalues = eigenvalues[p]
+    eigendirections = eigendirections[:,p]
+    return eigenvalues, eigendirections
+end
+
+oscillate(order, n, i) = sin(i * order * pi / n) * 2 * pi / n
+
+function gen_eigendirection(order)
+    [oscillate(order, n_disk, i) for i in 1:n_disk]
+end
+
+function gen_eigendirections()
+    hcat([gen_eigendirection(order) for order in 1:n_disk]...)
+end
+
+function optimize_bf_with_eigendirections(freq, optim_params = get_optim_params(freq);
+        M=2000, variation=60e-6, n=1024, n_dim=5, eigendirections=nothing, 
+        starting_point=zeros(n_dim), kwargs...)
+    if eigendirections === nothing && n_dim > 0
+        eigenvalues, eigendirections = calc_eigendirections(freq, M=M, variation=variation,
+                                                           cost_fun=cost_fun(optim_params,
+                                                                             0; kwargs...))
+    end
+    if n_dim == 0
+        time = @elapsed optim_spacings =
+                            optimize_spacings(optim_params, 0, n=n,
+                                              cost_function=cost_fun(optim_params, 0;
+                                                                     kwargs...))
+    else
+        time = @elapsed optim_spacings =
+                            optimize_spacings(optim_params, 0, n=n,
+                                              starting_point=starting_point,
+                                        cost_function=cost_fun_rot(optim_params,
+                                                        eigendirections; kwargs...))
+        # optim_spacings = eigendirections[:,1:length(optim_spacings)] * optim_spacings
+    end
+    time, optim_spacings
+end
+
+function save_spacing_to_json(filename, freq, M, variation, n_dim, n, time, spacing)
+    data = Dict(:freq => freq, :M => M, :variation => variation, :n_dim => n_dim, :n => n,
+                :time => time, :spacing => spacing)
+    write_json("results/$filename", data)
+end
+
 
 function find_convergence(freq, M_range; N=50, variation=100e-6)
     diffs_var = @distributed (vcat) for M in M_range[1:end]
@@ -188,7 +182,7 @@ function scan_freq_range(start_freq, freq_range; M=2000, variation=60e-6, n=128,
     end
 end
 
-@. fit_function(x, p) = p[1] * (x - p[2])^2 + p[3]
+#@. fit_function(x, p) = p[1] * (x - p[2])^2 + p[3]
 
 function shift_bf(start_freq; n_dim=3, dir="results_shift")
     freqs = Vector{Int}()
