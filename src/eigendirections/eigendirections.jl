@@ -81,7 +81,9 @@ end
 
 function optimize_bf_with_eigendirections(freq, optim_params = get_optim_params(freq);
         M=2000, variation=60e-6, n=1024, n_dim=5, eigendirections=nothing, 
-        starting_point=zeros(n_dim), kwargs...)
+        starting_point=zeros(n_dim),
+        algorithm=BFGS(linesearch=BackTracking(order=2)),
+        options=Optim.Options(f_tol=1e-6), kwargs...)
     if eigendirections === nothing && n_dim > 0
         eigenvalues, eigendirections = calc_eigendirections(freq, M=M, variation=variation,
                                                            cost_fun=cost_fun(optim_params,
@@ -89,15 +91,16 @@ function optimize_bf_with_eigendirections(freq, optim_params = get_optim_params(
     end
     if n_dim == 0
         time = @elapsed optim_spacings =
-                            optimize_spacings(optim_params, 0, n=n,
+                            optimize_spacings(optim_params, 0, n=n, algorithm=algorithm,
+                                              options=options, starting_point=starting_point,
                                               cost_function=cost_fun(optim_params, 0;
                                                                      kwargs...))
     else
         time = @elapsed optim_spacings =
-                            optimize_spacings(optim_params, 0, n=n,
-                                              starting_point=starting_point,
-                                        cost_function=cost_fun_rot(optim_params,
-                                                        eigendirections; kwargs...))
+                            optimize_spacings(optim_params, 0, n=n, algorithm=algorithm,
+                                              options=options, starting_point=starting_point,
+                                              cost_function=cost_fun_rot(optim_params,
+                                                                    eigendirections; kwargs...))
         # optim_spacings = eigendirections[:,1:length(optim_spacings)] * optim_spacings
     end
     time, optim_spacings
