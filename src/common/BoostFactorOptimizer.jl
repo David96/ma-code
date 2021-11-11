@@ -1,4 +1,4 @@
-using BoostFractor, LineSearches, ForwardDiff, Optim, Base.Threads, DSP
+using BoostFractor, LineSearches, ForwardDiff, Optim, Base.Threads, DSP, Match
 
 function distances_from_spacing(init_spacing::Float64, n_region::Int)
     distance = Array{Float64}([i==1 ? 0 : i%2==0 ? init_spacing : 1e-3 for i=1:n_region])
@@ -202,24 +202,16 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zer
         # Add some random variation to start spacing.
         # Convergence very much depends on a good start point.
         x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .* 100e-6
-        od = OnceDifferentiable(cost_function, x_0, autodiff=:forward)
-        #results = Vector()
-        #costs = Vector{Float64}(undef, length(algorithms))
-        #for (j, algorithm) in enumerate(algorithms)
-        #    if i == 4
-        #        res = optimize(cost_function, x_0, algorithm, options)
-        #    else
-        #        res = optimize(od, x_0, algorithm, options)
-        #    end
-        #    push!(results, res)
-        #    costs[j] = cost_function(Optim.minimizer(res))
-        #    println("[$i] Optimizer $j: $(costs[j])")
-        #end
-        #cost = minimum(costs)
-        #winner = indexin(cost, costs)[1]
-        #res = results[winner]
-        #println("[$i] Optimizer $winner wins with cost $(cost)!")
-        res = optimize(od, x_0, algorithm, options)
+
+        # Depending on the optimizer we want a differentiable cost function
+        cf = @match algorithm begin
+                _::Optim.ZerothOrderOptimizer => cost_function
+                _::Optim.FirstOrderOptimizer => OnceDifferentiable(cost_function, x_0,
+                                                                   autodiff=:forward)
+                _::Optim.SecondOrderOptimizer => TwiceDifferentiable(cost_function, x_0,
+                                                                   autodiff=:forward)
+        end
+        res = optimize(cf, x_0, algorithm, options)
         cost = cost_function(Optim.minimizer(res))
         lock(lk)
         atomic_min!(best_cost, cost)
