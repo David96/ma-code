@@ -193,32 +193,40 @@ end
 function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zeros(p.n_disk),
                            cost_function=cost_fun(p, fixed_disk), n=1024,
                            algorithm=BFGS(linesearch=BackTracking(order=2)),
-                           options=Optim.Options(f_tol=1e-6))
+                           options=Optim.Options(f_tol=1e-6),
+                           threshold_cost=-Inf)
     spacings = Vector{Float64}()
     best_cost = Atomic{Float64}(1002.)
+    stop = Atomic{Bool}(false)
     lk = SpinLock()
     # Run initial optimization a few times and pick the best one
     @threads for i in 1:n
-        # Add some random variation to start spacing.
-        # Convergence very much depends on a good start point.
-        x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .* 100e-6
+        if !stop[]
+            # Add some random variation to start spacing.
+            # Convergence very much depends on a good start point.
+            x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .* 100e-6
 
-        # Depending on the optimizer we want a differentiable cost function
-        cf = @match algorithm begin
-                _::Optim.ZerothOrderOptimizer => cost_function
-                _::Optim.FirstOrderOptimizer => OnceDifferentiable(cost_function, x_0,
-                                                                   autodiff=:forward)
-                _::Optim.SecondOrderOptimizer => TwiceDifferentiable(cost_function, x_0,
-                                                                   autodiff=:forward)
+            # Depending on the optimizer we want a differentiable cost function
+            cf = @match algorithm begin
+                    _::Optim.ZerothOrderOptimizer => cost_function
+                    _::Optim.FirstOrderOptimizer => OnceDifferentiable(cost_function, x_0,
+                                                                       autodiff=:forward)
+                    _::Optim.SecondOrderOptimizer => TwiceDifferentiable(cost_function, x_0,
+                                                                       autodiff=:forward)
+            end
+            res = optimize(cf, x_0, algorithm, options)
+            cost = cost_function(Optim.minimizer(res))
+            lock(lk)
+            atomic_min!(best_cost, cost)
+            if atomic_cas!(best_cost, cost, cost) === cost
+                spacings = Optim.minimizer(res)
+                if cost < threshold_cost
+                    println("Reached threshold at $i")
+                    stop[] = true
+                end
+            end
+            unlock(lk)
         end
-        res = optimize(cf, x_0, algorithm, options)
-        cost = cost_function(Optim.minimizer(res))
-        lock(lk)
-        atomic_min!(best_cost, cost)
-        if atomic_cas!(best_cost, cost, cost) === cost
-            spacings = Optim.minimizer(res)
-        end
-        unlock(lk)
     end
     println("Best cost: $best_cost")
     spacings
