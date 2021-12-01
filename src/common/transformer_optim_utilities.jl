@@ -160,19 +160,11 @@ function calc_boostfactor_cost(dist_shift::Array{T,1},itp,frequencies,sbdry::Set
         cpld_pwr = abs2.(sum(conj.(Eout[1,:,:]).*m_reflect, dims=1)[1,:])
         cost =  -p_norm(cpld_pwr,-20)*penalty
     elseif ref !== nothing
-        if fix_phase
-            # Set antenna spacing to minus the sum of disk spacings to remove additional phase
-            # factor. Only works for 1D!
-            @assert modes.mode_kt == Array{Complex{Float64}}(zeros(1,1)) # true for 1D
-
-            if typeof(dist_shift[1]) == Float64
-                sbdry.distance[end] = - sum(dist_shift)
-            else
-                sbdry.distance[end] = - sum(map(x -> x.value, dist_shift))
-            end
-        end
         Eout = calc_modes(sbdry,coords,modes,frequencies,prop_matrices_set_interp, m_reflect,
                                       diskR=diskR,prop=prop)
+        if fix_phase
+            Eout[2, 1, :] .*= [exp(-1im * sum(dist_shift) / 3e8 * 2 * pi * f) for f in frequencies]
+        end
         cost = ref_comp(Eout, ref)
     end
     return cost
