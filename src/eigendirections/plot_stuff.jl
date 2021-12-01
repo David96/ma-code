@@ -3,7 +3,7 @@ using Glob
 using Plots
 using Statistics
 using LsqFit
-using Interact
+#using Interact
 
 plotly()
 default(leg=false, titlefont=font(family="sans-serif", pointsize=10), markerstrokecolor=:auto)
@@ -48,7 +48,7 @@ function plot_dims(dir, freq; area=true)
         push!(x_n, data[1]["n_dim"])
         costs = Vector{Float64}()
         times = Vector{Float64}()
-        init_spacing = read_init_spacing_from_file("results/init_$(freq).txt")
+        init_spacing = get_init_spacings(freq)
         freq = data[1]["freq"]
         f_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9)
         distances = distances_from_spacing(init_spacing, n_region)
@@ -61,7 +61,7 @@ function plot_dims(dir, freq; area=true)
                 spacings = eigendirections[:, 1:d["n_dim"]] * spacings
             end
             cost_0 = calc_real_bf_cost(p, spacings, fixed_disk=0, area=area)
-            cost_0 = -cost_0 / 50e6
+            cost_0 = -cost_0# / 50e6
             push!(costs, cost_0)
             push!(times, d["time"])
         end
@@ -213,7 +213,7 @@ function plot_interactive_movement(start_freq, shift_range, s_0, eigendirections
         eout = calc_eout(optim_params, spacing, fixed_disk=0)
         shifted_eout[shift] = abs2.(eout[1, 1, :])
     end
-    @manipulate for shift in shift_range
+    for shift in shift_range
         vbox(plot(freq_range / 1e9, shifted_eout[shift], ylims=(0, 5e4)))
     end
 end
@@ -238,13 +238,13 @@ function plot_eigendirections(freq, n; cost_fun=nothing,
     ed = ev_ed[2]
     #display(eigenvalues)
     #display(eigendirections)
-    bar(collect(1:20), ev./ sum(ev),
+    bar(collect(1:length(ev)), ev./ sum(ev),
         layout=(cld(n+1, 2), 2), subplot=1,
         size=(600, cld(n, 3) * 250), xlabel="\$i\$", ylabel="\$\\lambda_i \$", yscale=:log10,
         title="Eigenvalues")
     #eigendirections = gen_eigendirections()
     for i = 1:n
-        bar!(collect(1:20), ed[:,i], subplot=i+1,
+        bar!(collect(1:length(ev)), ed[:,i], subplot=i+1,
              xlabel="\$i\$", ylabel="\$d_i \$", ylims=(-0.6, 0.6), title="Eigendirection $i")
     end
 
@@ -253,7 +253,7 @@ end
 
 function plot_ed_scan(file, freq_range)
     data = read_json(file)
-    @manipulate for freq = freq_range
+    for freq = freq_range
         i = indexin(freq, freq_range)[1]
         ev_ed = data[i]
         ev_ed[2] = json_to_ed(ev_ed[2])
