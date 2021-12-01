@@ -77,7 +77,7 @@ end;
 """
 Calculate interpolated propagation matrices set without tilts
 """
-function interpolate_prop_matrix(itp,dist_shift::Array{T,1}) where T<:Real
+function interpolate_prop_matrix(itp,dist_shift::AbstractArray{T,1}) where T<:Real
     n_region = size(itp,1)
     n_freq = size(itp,2)
     n_mode = size(itp,6)
@@ -142,7 +142,7 @@ function calc_modes(sbdry,coords,modes, frequencies, prop_matrices_set::Array{Ar
 end;
 
 
-function calc_boostfactor_cost(dist_shift::Array{T,1},itp,frequencies,sbdry::SetupBoundaries,
+function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,sbdry::SetupBoundaries,
                 coords::CoordinateSystem, modes::Modes, m_reflect; diskR=0.15, prop=propagator,
                 ref=nothing, fix_phase=false,
                 ref_comp=(eout, ref) -> sum(abs2.(eout[2, :, :] - ref))) where T<:Real
@@ -170,7 +170,7 @@ function calc_boostfactor_cost(dist_shift::Array{T,1},itp,frequencies,sbdry::Set
     return cost
 end;
 
-function calc_boostfactor_cost_gradient(dist_shift::Array{T,1},itp,frequencies,sbdry::SetupBoundaries,coords::CoordinateSystem,modes::Modes,m_reflect; diskR=0.15, prop=propagator) where T<:Real
+function calc_boostfactor_cost_gradient(dist_shift::AbstractArray{T, 1},itp,frequencies,sbdry::SetupBoundaries,coords::CoordinateSystem,modes::Modes,m_reflect; diskR=0.15, prop=propagator) where T<:Real
     dist_bound_hard = Interpolations.bounds(itp)[3]
     #Return hard penalty when exceeding interpolation bounds
     if any(.!(dist_bound_hard[1] .< dist_shift .< dist_bound_hard[2])) #|| !(dist_bound_hard[1]<-sum(dist_shift)<dist_bound_hard[2])
@@ -195,7 +195,7 @@ end;
 This adds a soft barrier penalty when dist_shift is approaching the maximum shifts allowed.
 Hard box contrains usually confuse optimizers
 """ 
-function soft_box_penalty(shift::Array{T,1},bound_hard) where T<:Real
+function soft_box_penalty(shift::AbstractArray{T,1},bound_hard) where T<:Real
     soft_bound_depth = (bound_hard[2]-bound_hard[1])*0.05
     l_soft_bound = bound_hard[1] + soft_bound_depth
     u_soft_bound = bound_hard[2] - soft_bound_depth
@@ -256,7 +256,7 @@ p norm (https://en.wikipedia.org/wiki/Lp_space#The_p-norm_in_finite_dimensions)
 For large positive/negative p this is a differentiable approximatation of max(X)/min(X) 
 Beware of numerical instability for large p. p~20 seems fine.
 """
-function p_norm(X::Array{T,1},p) where T<:Real        
+function p_norm(X::AbstractArray{T,1},p) where T<:Real        
     magnitude = maximum(X)
     X_norm = X ./ magnitude
     return magnitude*(1/length(X) * sum(X_norm.^p))^(1/p)
