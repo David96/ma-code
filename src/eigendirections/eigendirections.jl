@@ -1,4 +1,4 @@
-using Distributed, ClusterManagers, Glob
+using Distributed, ClusterManagers, Glob, HCubature, Cuba
 
 using BoostFractor
 using Optim
@@ -15,7 +15,8 @@ function grad_cost_fun(x, p::BoosterParams; cost=nothing)
         ForwardDiff.gradient(cost, x)
     else
         #ForwardDiff.gradient(cost_fun(p, 0), x)
-        cost_fun(p, 0, gradient=true)(x)
+        _, grad = cost_fun(p, 0, gradient=true)(x)
+        return grad[1:p.n_disk]
     end
 end
 
@@ -33,7 +34,18 @@ end
 # M = Number of samples.
 # Takes a lot to converge but this might not be important as different eigendirections
 # seem to work equally well
-function calc_C_matrix(x_0, p::BoosterParams; M=1000, variation = 100e-6, cost_fun=nothing)
+function calc_C_matrix(x_0, p::BoosterParams; M=1000, variation = 50-6, cost_fun=nothing)
+    if cost_fun === nothing
+        f = x -> grad_cost_fun(x, p)
+    else
+        f = x -> grad_cost_fun(x, p, cost=cost_fun)
+    end
+    integral, error = hcubature((x) -> f(x) * transpose(f(x)), x_0 .- variation / 2,
+                         x_0 .+ variation / 2, rtol = 0.1, norm=a -> sqrt(sum([x*x for x in a])) / variation^p.n_disk)
+    integral ./= variation^p.n_disk
+    display(integral)
+    display(error)
+    return integral
     while true
         C_matrix = zeros(p.n_disk, p.n_disk)
 
@@ -42,8 +54,8 @@ function calc_C_matrix(x_0, p::BoosterParams; M=1000, variation = 100e-6, cost_f
             if cost_fun !== nothing
                 grad = grad_cost_fun(x_i, p, cost=cost_fun)
             else
-                _, grad = grad_cost_fun(x_i, p)
-                grad = grad[1:p.n_disk] # remove the last entry corresponding to the gap between last disk and antenna
+                grad = grad_cost_fun(x_i, p)
+                #grad = grad[1:p.n_disk] # remove the last entry corresponding to the gap between last disk and antenna
             end
             C_matrix += (grad / M) .* transpose(grad)
         end
