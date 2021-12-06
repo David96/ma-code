@@ -67,12 +67,14 @@ function init_optimizer(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_wi
     return p
 end
 
-function update_itp_sub(p::BoosterParams; range=-2500:50:2500)
+function update_itp_sub(p::BoosterParams; range=-2500:50:2500, losses=0)
     spacing_grid = (range)*1e-6
     prop_matrix_grid_sub = calc_propagation_matrices_grid(p.sbdry_init, p.coords, p.modes,
                                                           spacing_grid, p.freq_optim,
+                                                          losses_grid=losses,
                                                           diskR=p.diskR, prop=p.prop)
-    p.itp_sub = construct_prop_matrix_interpolation(prop_matrix_grid_sub, spacing_grid)
+    p.itp_sub = construct_prop_matrix_interpolation(prop_matrix_grid_sub, spacing_grid,
+                                                   losses)
 end
 
 function update_freq_center(params::BoosterParams, center = params.freq_center,
@@ -306,6 +308,7 @@ function get_init_spacings(freq, freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5
     if isfile("results/init_$(freq).txt")
         return read_init_spacing_from_file("results/init_$(freq).txt")
     else
+        eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
         optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, 50e6, freq_range,
                                       distances_from_spacing(0.0, 2*n_disk + 2), eps,
                                       update_itp=false)

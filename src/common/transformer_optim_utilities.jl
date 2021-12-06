@@ -2,19 +2,23 @@ using BoostFractor
 using Distances
 using Interpolations
 using DSP
+using Match
 
 
 """
 Calculates propagation matrices for all regions and frequencies at given relative spacings (optionally relative tilts aswell)
 The returned matrix is (n_regions x n_freq x n_spacing x n_tilt_x x n_tilt_y x n_mode x n_mode)      
 """
-function calc_propagation_matrices_grid(sbdry::SetupBoundaries,coords::CoordinateSystem, modes::Modes,spacing_grid,frequencies;tilt_x_grid=0,tilt_y_grid=0, prop=propagator, diskR=0.15)
+function calc_propagation_matrices_grid(sbdry::SetupBoundaries,coords::CoordinateSystem,
+                                        modes::Modes,spacing_grid,frequencies;tilt_x_grid=0,
+                                        tilt_y_grid=0, losses_grid=0, prop=propagator, diskR=0.15)
     n_region = length(sbdry.distance)
     n_disk = (n_region-2)÷2
     n_freq = length(frequencies)
     n_spacing = length(spacing_grid)
     n_tilt_x = length(tilt_x_grid)
     n_tilt_y = length(tilt_y_grid)
+    n_losses = length(losses_grid)
     n_mode = modes.M*(2*modes.L+1)
     #Split booster into air gaps and solids(disks+mirror) since the latter stay constant and need just one calculation
     #for each frequency
@@ -34,23 +38,34 @@ function calc_propagation_matrices_grid(sbdry::SetupBoundaries,coords::Coordinat
     distance_0 = copy(sbdry_gap.distance)
     tilt_x_0 = copy(sbdry_gap.relative_tilt_x)
     tilt_y_0 = copy(sbdry_gap.relative_tilt_y)
-    prop_matrix_grid = Array{Complex{Float64},7}(undef,n_region,n_freq,n_spacing,n_tilt_x,n_tilt_y,n_mode,n_mode)
+    prop_matrix_grid = Array{Complex{Float64},8}(undef,n_region,n_freq,n_spacing,n_tilt_x,
+                                                 n_tilt_y,n_losses,n_mode,n_mode)
 
 
     Threads.@threads for f in 1:n_freq
-        prop_matrix_solid = calc_propagation_matrices(sbdry_solid,coords,modes;f=frequencies[f],prop=prop,diskR=diskR)
+        prop_matrices_solid = Vector{Any}(undef, n_losses)
+        for (i, loss) in enumerate(losses_grid)
+            sbdry_i = copy_setup_boundaries(sbdry_solid, coords)
+            sbdry_i.eps .+= Complex(0, loss)
+            prop_matrices_solid[i] =  calc_propagation_matrices(sbdry_i, coords, modes;
+                                                        f=frequencies[f],prop=prop,diskR=diskR)
+        end
         for s in 1:n_spacing, tx in 1:n_tilt_x, ty in 1:n_tilt_y
             sbdry_i = copy_setup_boundaries(sbdry_gap,coords) #For thread safety
             sbdry_i.distance = distance_0 .+ spacing_grid[s]
             sbdry_i.relative_tilt_x = tilt_x_0 .+ tilt_x_grid[tx]
             sbdry_i.relative_tilt_y = tilt_y_0 .+ tilt_y_grid[ty]
 
-            prop_matrix_gap = calc_propagation_matrices(sbdry_i,coords,modes;f=frequencies[f],prop=prop,diskR=diskR)
-            prop_matrix_grid[ind_gap,f,s,tx,ty,:,:] = [(prop_matrix_gap[r][k,j]) for r in 1:n_disk+1, k in 1:n_mode, j in 1:n_mode]
-            prop_matrix_grid[ind_solid,f,s,tx,ty,:,:] = [(prop_matrix_solid[r][k,j]) for r in 1:n_disk+1, k in 1:n_mode, j in 1:n_mode]
+            prop_matrix_gap = calc_propagation_matrices(sbdry_i, coords, modes;
+                                                        f=frequencies[f],prop=prop,diskR=diskR)
+            for l in 1:n_losses
+                prop_matrix_grid[ind_gap,f,s,tx,ty,l,:,:] = [(prop_matrix_gap[r][k,j])
+                                             for r in 1:n_disk+1, k in 1:n_mode, j in 1:n_mode]
+                prop_matrix_grid[ind_solid,f,s,tx,ty,l,:,:] = [(prop_matrices_solid[l][r][k,j])
+                                             for r in 1:n_disk+1, k in 1:n_mode, j in 1:n_mode]
+            end
         end;
     end
-
     return prop_matrix_grid
 end;
 
@@ -58,34 +73,38 @@ end;
 """
 Constructs the interpolation object from Interpolations without tilts
 """
-function construct_prop_matrix_interpolation(prop_matrix_grid::Array{Complex{Float64},7}, spacing_grid)
+function construct_prop_matrix_interpolation(prop_matrix_grid::Array{Complex{Float64},8},
+                                             spacing_grid, losses_grid)
     n_region = size(prop_matrix_grid,1)
     n_freq = size(prop_matrix_grid,2)
     n_spacing = size(prop_matrix_grid,3)
     n_tilt_x = size(prop_matrix_grid,4)
     n_tilt_y = size(prop_matrix_grid,5)
-    n_mode = size(prop_matrix_grid,6)    
+    n_losses = size(prop_matrix_grid, 6)
+    n_mode = size(prop_matrix_grid,7)
     #Construct the interpolation object
     itp_fun = Interpolations.BSpline(Cubic(Natural(OnCell())))
     itp = Interpolations.interpolate(prop_matrix_grid, (NoInterp(),NoInterp(),
-                                        itp_fun,NoInterp(),
-                                        NoInterp(),NoInterp(),NoInterp()))
-    itp = Interpolations.scale(itp,1:n_region,1:n_freq,spacing_grid,1:n_tilt_x,1:n_tilt_y,1:n_mode,1:n_mode)  
+                                        itp_fun, NoInterp(),
+                                        NoInterp(), n_losses > 1 ? itp_fun : NoInterp(),
+                                        NoInterp(), NoInterp()))
+    itp = Interpolations.scale(itp, 1:n_region, 1:n_freq, spacing_grid, 1:n_tilt_x, 1:n_tilt_y,
+                               n_losses > 1 ? losses_grid : (1:1), 1:n_mode, 1:n_mode)
     return itp
 end;
 
 """
 Calculate interpolated propagation matrices set without tilts
 """
-function interpolate_prop_matrix(itp,dist_shift::AbstractArray{T,1}) where T<:Real
+function interpolate_prop_matrix(itp, dist_shift::AbstractArray{T,1}, loss) where T<:Real
     n_region = size(itp,1)
     n_freq = size(itp,2)
-    n_mode = size(itp,6)
+    n_mode = size(itp,7)
     #Disk thickness stays constant and last air gap stay constant 
     dist_shift_all = [(r+1)%2==0 ? 0.0 : r==n_region ? 0 : dist_shift[r÷2] for r in 1:n_region]
     prop_matrix_set_interp = Array{Array{Complex{T},2}}(undef,n_region,n_freq)
     for f=1:n_freq
-        prop_matrix_set_interp[:,f] = [itp(r,f,dist_shift_all[r],1,1,1:n_mode,1:n_mode) for r in 1:n_region]
+        prop_matrix_set_interp[:,f] = [itp(r,f,dist_shift_all[r],1,1,loss,1:n_mode,1:n_mode) for r in 1:n_region]
     end
     return prop_matrix_set_interp
 end;
@@ -145,8 +164,11 @@ end;
 function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,sbdry::SetupBoundaries,
                 coords::CoordinateSystem, modes::Modes, m_reflect; diskR=0.15, prop=propagator,
                 ref=nothing, fix_phase=false,
-                ref_comp=(eout, ref) -> sum(abs2.(eout[2, :, :] - ref))) where T<:Real
+                ref_comp=(eout, ref) -> sum(abs2.(eout[2, :, :] - ref)),
+                extra_parameters=[]) where T<:Real
     dist_bound_hard = Interpolations.bounds(itp)[3]
+    params = dist_shift[end-length(extra_parameters):end]
+    dist_shift = dist_shift[1:end-length(extra_parameters)]
     #Return hard penalty when exceeding interpolation bounds
     if any(.!(dist_bound_hard[1] .< dist_shift .< dist_bound_hard[2])) 
         return 1001.0
@@ -154,7 +176,13 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,s
     #Add soft penalty when approaching interpolation bounds
     penalty = soft_box_penalty(dist_shift,dist_bound_hard)
 
-    prop_matrices_set_interp = interpolate_prop_matrix(itp,dist_shift);
+    loss = 0
+    for (i, param) in enumerate(extra_parameters)
+        @match param begin
+            "loss" => (loss = params[i])
+        end
+    end
+    prop_matrices_set_interp = interpolate_prop_matrix(itp, dist_shift, loss);
     if ref === nothing
         Eout = calc_boostfactor_modes(sbdry,coords,modes,frequencies,prop_matrices_set_interp,diskR=diskR,prop=prop)
         cpld_pwr = abs2.(sum(conj.(Eout[1,:,:]).*m_reflect, dims=1)[1,:])
@@ -179,7 +207,7 @@ function calc_boostfactor_cost_gradient(dist_shift::AbstractArray{T, 1},itp,freq
     #Add soft penalty when approaching interpolation bounds
     penalty = soft_box_penalty(dist_shift,dist_bound_hard)
 
-    prop_matrices_set_interp = interpolate_prop_matrix(itp,dist_shift);
+    prop_matrices_set_interp = interpolate_prop_matrix(itp,dist_shift, 0);
     Eout, Eout_jacobian = calc_boostfactor_modes_jacobian(sbdry,coords,modes,frequencies,prop_matrices_set_interp, diskR=diskR, prop=prop)
     cpld_amp = sum(conj.(Eout[1,:,:]).*m_reflect, dims=1)[1,:]
     cpld_pwr = abs2.(cpld_amp)
