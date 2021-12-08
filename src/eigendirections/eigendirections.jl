@@ -1,4 +1,4 @@
-using Distributed, ClusterManagers, Glob, HCubature, Cuba
+using Distributed, ClusterManagers, Glob, HCubature
 
 using BoostFractor
 using Optim
@@ -40,11 +40,11 @@ function calc_C_matrix(x_0, p::BoosterParams; M=1000, variation = 50-6, cost_fun
     else
         f = x -> grad_cost_fun(x, p, cost=cost_fun)
     end
-    integral, error = hcubature((x) -> f(x) * transpose(f(x)), x_0 .- variation / 2,
-                         x_0 .+ variation / 2, rtol = 0.1, norm=a -> sqrt(sum([x*x for x in a])) / variation^p.n_disk)
-    integral ./= variation^p.n_disk
+    integral, error = hcubature((x) -> f(x) * transpose(f(x)) / variation^p.n_disk, x_0 .- variation / 2,
+                         x_0 .+ variation / 2, rtol = 0.05,
+                         norm=a -> sum([x*x for x in a]))
     display(integral)
-    display(error)
+    display(sqrt(error))
     return integral
     while true
         C_matrix = zeros(p.n_disk, p.n_disk)
