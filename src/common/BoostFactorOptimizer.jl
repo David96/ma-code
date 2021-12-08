@@ -67,7 +67,7 @@ function init_optimizer(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_wi
     return p
 end
 
-function update_itp_sub(p::BoosterParams; range=-2500:50:2500, losses=0)
+function update_itp_sub(p::BoosterParams; range=-2500:50:2500, losses=0:0)
     spacing_grid = (range)*1e-6
     prop_matrix_grid_sub = calc_propagation_matrices_grid(p.sbdry_init, p.coords, p.modes,
                                                           spacing_grid, p.freq_optim,

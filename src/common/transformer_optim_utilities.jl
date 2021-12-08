@@ -99,12 +99,15 @@ Calculate interpolated propagation matrices set without tilts
 function interpolate_prop_matrix(itp, dist_shift::AbstractArray{T,1}, loss) where T<:Real
     n_region = size(itp,1)
     n_freq = size(itp,2)
+    n_losses = size(itp, 6)
     n_mode = size(itp,7)
     #Disk thickness stays constant and last air gap stay constant 
     dist_shift_all = [(r+1)%2==0 ? 0.0 : r==n_region ? 0 : dist_shift[r÷2] for r in 1:n_region]
     prop_matrix_set_interp = Array{Array{Complex{T},2}}(undef,n_region,n_freq)
     for f=1:n_freq
-        prop_matrix_set_interp[:,f] = [itp(r,f,dist_shift_all[r],1,1,loss,1:n_mode,1:n_mode) for r in 1:n_region]
+        prop_matrix_set_interp[:,f] = [itp(r, f, dist_shift_all[r], 1, 1,
+                                           n_losses > 1 ? loss : 1,
+                                           1:n_mode, 1:n_mode) for r in 1:n_region]
     end
     return prop_matrix_set_interp
 end;
@@ -114,7 +117,7 @@ end;
 """
 Calculates boostfactor for given frequencies and booster. Note that the distances in sbdry are meaningless since
 propagation_matrices_set already contains the effect of spacings.
-"""        
+"""
 function calc_boostfactor_modes(sbdry,coords,modes, frequencies, prop_matrices_set::Array{Array{Complex{T},2},2}; diskR=0.15,prop=propagator) where T<:Real
     n_freq = length(frequencies)
     n_modes = size(prop_matrices_set[1,1])[1]
@@ -182,14 +185,23 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,s
             "loss" => (loss = params[i])
         end
     end
-    prop_matrices_set_interp = interpolate_prop_matrix(itp, dist_shift, loss);
     if ref === nothing
+        prop_matrices_set_interp = interpolate_prop_matrix(itp, dist_shift, loss);
         Eout = calc_boostfactor_modes(sbdry,coords,modes,frequencies,prop_matrices_set_interp,diskR=diskR,prop=prop)
         cpld_pwr = abs2.(sum(conj.(Eout[1,:,:]).*m_reflect, dims=1)[1,:])
         cost =  -p_norm(cpld_pwr,-20)*penalty
     elseif ref !== nothing
-        Eout = calc_modes(sbdry,coords,modes,frequencies,prop_matrices_set_interp, m_reflect,
-                                      diskR=diskR,prop=prop)
+        sbdry_new = deepcopy(sbdry)
+        sbdry_new.distance[2:2:end-2] .+= dist_shift
+        sbdry_new.eps[1:2:end-1] .+= Complex(0, loss)
+        prop_matrix_grid_plot = calc_propagation_matrices_grid(sbdry_new, coords, modes, 0,
+                                                               frequencies, diskR=diskR,
+                                                               prop=prop)
+        prop_matrix_plot = [prop_matrix_grid_plot[r,f,1,1,1,:,:]
+                            for r = 1:length(sbdry_new.distance),
+                                f = 1:length(frequencies)]
+        Eout = calc_modes(sbdry_new, coords, modes, frequencies, prop_matrix_plot, m_reflect,
+                                      diskR=diskR, prop=prop)
         if fix_phase
             Eout[2, 1, :] .*= [exp(-1im * sum(dist_shift) / 3e8 * 2 * pi * f) for f in frequencies]
         end
