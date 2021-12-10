@@ -194,7 +194,12 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,s
         cost =  -p_norm(cpld_pwr,-20)*penalty
     elseif ref !== nothing
         sbdry_new = deepcopy(sbdry)
-        sbdry_new.eps[3:2:end-1] -= map(l -> Complex(0, l), loss)
+        for (i, r) in enumerate(3:2:(length(sbdry_new.eps)-1))
+            n = sqrt(sbdry_new.eps[r])
+            n *= exp(loss[i] * 1im)
+            sbdry_new.eps[r] = n*n
+        end
+        #sbdry_new.eps[3:2:end-1] -= map(l -> Complex(0, l), loss)
         sbdry_new.distance[2:2:end-2] += dist_shift
         prop_matrix_grid_plot = calc_propagation_matrices_grid(sbdry_new, coords, modes, 0,
                                                                frequencies, diskR=diskR,
