@@ -170,21 +170,23 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,s
                 ref_comp=(eout, ref) -> sum(abs2.(eout[2, :, :] - ref)),
                 extra_parameters=[]) where T<:Real
     dist_bound_hard = Interpolations.bounds(itp)[3]
-    #params = dist_shift[end-length(extra_parameters):end]
-    #dist_shift = dist_shift[1:end-length(extra_parameters)]
+    n_disk = length(sbdry.distance[2:2:end-2])
+    n_params = length(extra_parameters)
+    params = [dist_shift[end-i+1:(end - i + n_disk)] for i in (n_disk * n_params):n_disk:n_disk]
+    dist_shift = dist_shift[1:end - n_params * n_disk]
     #Return hard penalty when exceeding interpolation bounds
     if any(.!(dist_bound_hard[1] .< dist_shift .< dist_bound_hard[2])) 
-        return 1001.0
+        #return 1001.0
     end
     #Add soft penalty when approaching interpolation bounds
     penalty = soft_box_penalty(dist_shift,dist_bound_hard)
 
-    #loss = 0
-    #for (i, param) in enumerate(extra_parameters)
-    #    @match param begin
-    #        "loss" => (loss = params[i])
-    #    end
-    #end
+    loss = zeros(n_disk)
+    for (i, param) in enumerate(extra_parameters)
+        @match param begin
+            "loss" => (loss = params[i])
+        end
+    end
     if ref === nothing
         prop_matrices_set_interp = interpolate_prop_matrix(itp, dist_shift, loss);
         Eout = calc_boostfactor_modes(sbdry,coords,modes,frequencies,prop_matrices_set_interp,diskR=diskR,prop=prop)
@@ -192,11 +194,8 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,s
         cost =  -p_norm(cpld_pwr,-20)*penalty
     elseif ref !== nothing
         sbdry_new = deepcopy(sbdry)
-        if "loss" in extra_parameters
-            sbdry_new.eps[3:2:end-1] -= map(l -> Complex(0, l), dist_shift)
-        else
-            sbdry_new.distance[2:2:end-2] += dist_shift
-        end
+        sbdry_new.eps[3:2:end-1] -= map(l -> Complex(0, l), loss)
+        sbdry_new.distance[2:2:end-2] += dist_shift
         prop_matrix_grid_plot = calc_propagation_matrices_grid(sbdry_new, coords, modes, 0,
                                                                frequencies, diskR=diskR,
                                                                prop=prop)
