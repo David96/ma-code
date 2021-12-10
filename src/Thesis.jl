@@ -9,7 +9,7 @@ include("eigendirections/plot_stuff.jl")
 
 #include("fixed_disks/plot_stuff.jl")
 
-include("ml/neuralnet.jl")
+#include("ml/neuralnet.jl")
 
 for n in names(@__MODULE__; all=true)
     if Base.isidentifier(n) && n ∉ (Symbol(@__MODULE__), :eval, :include)

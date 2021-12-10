@@ -212,7 +212,7 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zer
             cf = @match algorithm begin
                     _::Optim.ZerothOrderOptimizer => cost_function
                     _::Optim.FirstOrderOptimizer => OnceDifferentiable(cost_function, x_0,
-                                                                       autodiff=:forward)
+                                                                       autodiff=:finite)
                     _::Optim.SecondOrderOptimizer => TwiceDifferentiable(cost_function, x_0,
                                                                        autodiff=:forward)
             end
@@ -279,7 +279,7 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false,
     prop_matrix_grid_plot = calc_propagation_matrices_grid(sbdry_optim, p.coords, p.modes, 0,
                                                            p.freq_range, diskR=p.diskR,
                                                            prop=p.prop)
-    prop_matrix_plot = [prop_matrix_grid_plot[r,f,1,1,1,:,:] for r = 1:(2 * p.n_disk + 2),
+    prop_matrix_plot = [prop_matrix_grid_plot[r,f,1,1,1,1,:,:] for r = 1:(2 * p.n_disk + 2),
                         f = 1:length(p.freq_range)]
     if reflect
         calc_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrix_plot, p.m_reflect,
@@ -299,14 +299,14 @@ function get_freq(phase_depth; eps=24, d=1e-3)
     phase_depth * 3e8 / (2π * d * sqrt(eps))
 end
 
-function get_init_spacings(freq, freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9),
+function get_init_spacings(freq, freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9);
                            epsilon=24, n_disk=20)
     if epsilon == 24 && n_disk == 20
         p = [0.04323293823102593, 0.11927287669916398, 0.004077191528864808]
         return p[1] * exp(-p[2] * freq / 1e9) + p[3]
-    end
-    if isfile("results/init_$(freq).txt")
-        return read_init_spacing_from_file("results/init_$(freq).txt")
+    #end
+    #if isfile("results/init_$(freq).txt")
+    #    return read_init_spacing_from_file("results/init_$(freq).txt")
     else
         eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
         optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, 50e6, freq_range,
@@ -326,7 +326,7 @@ function get_init_spacings(freq, freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5
                 best_spacing = i
             end
         end
-        write_init_spacing_to_file(best_spacing, freq)
+        #write_init_spacing_to_file(best_spacing, freq)
         return best_spacing
     end
 end
@@ -335,7 +335,7 @@ function get_optim_params(freq; freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e
                           update_itp=true, epsilon=24, n_disk=20, freq_width=50e6)
 
     eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
-    init_spacing = get_init_spacings(freq)
+    init_spacing = get_init_spacings(freq, n_disk=n_disk, epsilon=epsilon)
     distances = distances_from_spacing(init_spacing, n_disk * 2 + 2)
     optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, freq_width, freq_range,
                                   distances, eps, update_itp=update_itp,

@@ -2,3 +2,8 @@ name = "Thesis"
 uuid = "4c0571ce-7d0f-43ad-952c-ca20eb0c8461"
 authors = ["David Leppla-Weber <david@hameipe.de>"]
 version = "0.1.0"
+
+[deps]
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+HCubature = "19dc6840-f33b-545b-b366-655c7e3ffd49"
+ReverseDiff = "37e2e3b7-166d-5795-8a7a-e32c996b4267"
