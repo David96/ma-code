@@ -196,8 +196,8 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,s
         sbdry_new = deepcopy(sbdry)
         for (i, r) in enumerate(3:2:(length(sbdry_new.eps)-1))
             n = sqrt(sbdry_new.eps[r])
-            n *= exp(loss[i] * 1im)
-            sbdry_new.eps[r] = n*n
+            n += Complex(0, loss[i])#exp(loss[i] * 1im)
+            sbdry_new.eps[r] = n^2
         end
         #sbdry_new.eps[3:2:end-1] -= map(l -> Complex(0, l), loss)
         sbdry_new.distance[2:2:end-2] += dist_shift
