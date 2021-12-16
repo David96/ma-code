@@ -192,7 +192,9 @@ function cost_fun_equidistant(p::BoosterParams)
     end
 end
 
-function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zeros(p.n_disk),
+function optimize_spacings(p::BoosterParams, fixed_disk::Int;
+                           starting_point=zeros(p.n_disk),
+                           variation=fill(100e-6, length(starting_point)),
                            cost_function=cost_fun(p, fixed_disk), n=1024,
                            algorithm=BFGS(linesearch=BackTracking(order=2)),
                            options=Optim.Options(f_tol=1e-6),
@@ -206,13 +208,13 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int; starting_point=zer
         if !stop[]
             # Add some random variation to start spacing.
             # Convergence very much depends on a good start point.
-            x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .* 100e-6
+            x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .* variation
 
             # Depending on the optimizer we want a differentiable cost function
             cf = @match algorithm begin
                     _::Optim.ZerothOrderOptimizer => cost_function
                     _::Optim.FirstOrderOptimizer => OnceDifferentiable(cost_function, x_0,
-                                                                       autodiff=:finite)
+                                                                       autodiff=:forward)
                     _::Optim.SecondOrderOptimizer => TwiceDifferentiable(cost_function, x_0,
                                                                        autodiff=:forward)
             end

@@ -38,7 +38,7 @@ function calc_propagation_matrices_grid(sbdry::SetupBoundaries,coords::Coordinat
     distance_0 = copy(sbdry_gap.distance)
     tilt_x_0 = copy(sbdry_gap.relative_tilt_x)
     tilt_y_0 = copy(sbdry_gap.relative_tilt_y)
-    prop_matrix_grid = Array{Complex{Float64},8}(undef,n_region,n_freq,n_spacing,n_tilt_x,
+    prop_matrix_grid = Array{typeof(sbdry.eps[1]),8}(undef,n_region,n_freq,n_spacing,n_tilt_x,
                                                  n_tilt_y,n_losses,n_mode,n_mode)
 
 
@@ -47,7 +47,7 @@ function calc_propagation_matrices_grid(sbdry::SetupBoundaries,coords::Coordinat
         for (i, loss) in enumerate(losses_grid)
             sbdry_i = copy_setup_boundaries(sbdry_solid, coords)
             sbdry_i.eps .+= Complex(0, loss)
-            prop_matrices_solid[i] =  calc_propagation_matrices(sbdry_i, coords, modes;
+            prop_matrices_solid[i] = calc_propagation_matrices(sbdry_i, coords, modes;
                                                         f=frequencies[f],prop=prop,diskR=diskR)
         end
         for s in 1:n_spacing, tx in 1:n_tilt_x, ty in 1:n_tilt_y
@@ -73,8 +73,8 @@ end;
 """
 Constructs the interpolation object from Interpolations without tilts
 """
-function construct_prop_matrix_interpolation(prop_matrix_grid::Array{Complex{Float64},8},
-                                             spacing_grid, losses_grid)
+function construct_prop_matrix_interpolation(prop_matrix_grid::Array{Complex{T},8},
+                                             spacing_grid, losses_grid) where T<:Real
     n_region = size(prop_matrix_grid,1)
     n_freq = size(prop_matrix_grid,2)
     n_spacing = size(prop_matrix_grid,3)
@@ -84,6 +84,7 @@ function construct_prop_matrix_interpolation(prop_matrix_grid::Array{Complex{Flo
     n_mode = size(prop_matrix_grid,7)
     #Construct the interpolation object
     itp_fun = Interpolations.BSpline(Cubic(Natural(OnCell())))
+    display(prop_matrix_grid)
     itp = Interpolations.interpolate(prop_matrix_grid, (NoInterp(),NoInterp(),
                                         itp_fun, NoInterp(),
                                         NoInterp(), n_losses > 1 ? itp_fun : NoInterp(),
@@ -168,7 +169,7 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,s
                 coords::CoordinateSystem, modes::Modes, m_reflect; diskR=0.15, prop=propagator,
                 ref=nothing, fix_phase=false,
                 ref_comp=(eout, ref) -> sum(abs2.(eout[2, :, :] - ref)),
-                extra_parameters=[]) where T<:Real
+                extra_parameters=Dict()) where T<:Real
     dist_bound_hard = Interpolations.bounds(itp)[3]
     n_disk = length(sbdry.distance[2:2:end-2])
     n_params = length(extra_parameters)
@@ -182,9 +183,13 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,s
     penalty = soft_box_penalty(dist_shift,dist_bound_hard)
 
     loss = zeros(n_disk)
-    for (i, param) in enumerate(extra_parameters)
+    loss_scaling = 1
+    for (i, param) in enumerate(keys(extra_parameters))
         @match param begin
-            "loss" => (loss = params[i])
+            "loss" => begin
+                loss = params[i]
+                loss_scaling = extra_parameters["loss"]
+            end
         end
     end
     if ref === nothing
@@ -194,13 +199,19 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,s
         cost =  -p_norm(cpld_pwr,-20)*penalty
     elseif ref !== nothing
         sbdry_new = deepcopy(sbdry)
+        sbdry_new.distance = Array{Real, 1}(undef, length(sbdry.distance))
+        sbdry_new.eps = Array{Complex{Real}, 1}(undef, length(sbdry.eps))
         for (i, r) in enumerate(3:2:(length(sbdry_new.eps)-1))
-            n = sqrt(sbdry_new.eps[r])
-            n += Complex(0, loss[i])#exp(loss[i] * 1im)
-            sbdry_new.eps[r] = n^2
+            if loss[i] * loss_scaling + imag(sbdry.eps[r]) > 0
+                println("Loss: $(loss[i] * loss_scaling), imag(n): $(imag(n))")
+                return 999
+            end
+            sbdry_new.eps[r] = (sqrt(sbdry.eps[r]) + complex(0, loss[i] * loss_scaling))^2
         end
-        #sbdry_new.eps[3:2:end-1] -= map(l -> Complex(0, l), loss)
-        sbdry_new.distance[2:2:end-2] += dist_shift
+        sbdry_new.eps[vcat(1,2:2:end)] = sbdry.eps[vcat(1,2:2:end)]
+        #sbdry_new.eps[3:2:end-1] -= map(l -> complex(0, l), loss)
+        sbdry_new.distance[2:2:end-2] = sbdry.distance[2:2:end-2] + dist_shift
+        sbdry_new.distance[vcat(1:2:end-1, end)] = sbdry.distance[vcat(1:2:end-1, end)]
         prop_matrix_grid_plot = calc_propagation_matrices_grid(sbdry_new, coords, modes, 0,
                                                                frequencies, diskR=diskR,
                                                                prop=prop)
@@ -210,7 +221,8 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,s
         Eout = calc_modes(sbdry_new, coords, modes, frequencies, prop_matrix_plot, m_reflect,
                                       diskR=diskR, prop=prop)
         if fix_phase
-            Eout[2, 1, :] .*= [exp(-1im * sum(dist_shift) / 3e8 * 2 * pi * f) for f in frequencies]
+            Eout[2, 1, :] .*= [exp(-1im * sum(dist_shift) / 3e8 * 2 * pi * f)
+                               for f in frequencies]
         end
         cost = ref_comp(Eout, ref)
     end
