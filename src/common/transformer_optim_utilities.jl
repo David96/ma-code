@@ -1,4 +1,5 @@
 using BoostFractor
+using OrderedCollections
 using Distances
 using Interpolations
 using DSP
@@ -84,7 +85,6 @@ function construct_prop_matrix_interpolation(prop_matrix_grid::Array{Complex{T},
     n_mode = size(prop_matrix_grid,7)
     #Construct the interpolation object
     itp_fun = Interpolations.BSpline(Cubic(Natural(OnCell())))
-    display(prop_matrix_grid)
     itp = Interpolations.interpolate(prop_matrix_grid, (NoInterp(),NoInterp(),
                                         itp_fun, NoInterp(),
                                         NoInterp(), n_losses > 1 ? itp_fun : NoInterp(),
@@ -169,62 +169,93 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1},itp,frequencies,s
                 coords::CoordinateSystem, modes::Modes, m_reflect; diskR=0.15, prop=propagator,
                 ref=nothing, fix_phase=false,
                 ref_comp=(eout, ref) -> sum(abs2.(eout[2, :, :] - ref)),
-                extra_parameters=Dict()) where T<:Real
-    dist_bound_hard = Interpolations.bounds(itp)[3]
-    n_disk = length(sbdry.distance[2:2:end-2])
-    n_params = length(extra_parameters)
-    params = [dist_shift[end-i+1:(end - i + n_disk)] for i in (n_disk * n_params):n_disk:n_disk]
-    dist_shift = dist_shift[1:end - n_params * n_disk]
-    #Return hard penalty when exceeding interpolation bounds
-    if any(.!(dist_bound_hard[1] .< dist_shift .< dist_bound_hard[2])) 
-        #return 1001.0
+                parameters::OrderedDict=OrderedDict(:spacings => length(dist_shift)),
+                scaling=fill(1, length(dist_shift))) where T<:Real
+    #dist_bound_hard = Interpolations.bounds(itp)[3]
+    dist_shift_scaled = dist_shift .* scaling
+    params = Dict()
+    offset = 1
+    for (param, n) in parameters
+        params[param] = dist_shift_scaled[offset:offset+n-1]
+        offset += n
     end
-    #Add soft penalty when approaching interpolation bounds
-    penalty = soft_box_penalty(dist_shift,dist_bound_hard)
+    if false
+        println("Shift: $(ForwardDiff.value.(dist_shift))")
+        println("Spacings: $(ForwardDiff.value.(params[:spacings]))")
+        #println("Loss: $(ForwardDiff.value.(params[:loss]))")
+        println("Antenna: $(ForwardDiff.value.(params[:antenna]))")
+        println("Scalings: $scaling")
+    end
 
-    loss = zeros(n_disk)
-    loss_scaling = 1
-    for (i, param) in enumerate(keys(extra_parameters))
-        @match param begin
-            "loss" => begin
-                loss = params[i]
-                loss_scaling = extra_parameters["loss"]
-            end
-        end
-    end
+    #Return hard penalty when exceeding interpolation bounds
+    #if any(.!(dist_bound_hard[1] .< spacings[1:end-1] .< dist_bound_hard[2])) 
+        #return 1001.0
+    #end
+    #Add soft penalty when approaching interpolation bounds
+    #penalty = soft_box_penalty(spacings[1:end-1],dist_bound_hard)
+    penalty = 0
+
     if ref === nothing
-        prop_matrices_set_interp = interpolate_prop_matrix(itp, dist_shift, loss);
+        @assert :spacings in params && :loss in params
+        prop_matrices_set_interp = interpolate_prop_matrix(itp, spacings, loss);
         Eout = calc_boostfactor_modes(sbdry,coords,modes,frequencies,prop_matrices_set_interp,diskR=diskR,prop=prop)
         cpld_pwr = abs2.(sum(conj.(Eout[1,:,:]).*m_reflect, dims=1)[1,:])
         cost =  -p_norm(cpld_pwr,-20)*penalty
     elseif ref !== nothing
-        sbdry_new = deepcopy(sbdry)
-        sbdry_new.distance = Array{Real, 1}(undef, length(sbdry.distance))
-        sbdry_new.eps = Array{Complex{Real}, 1}(undef, length(sbdry.eps))
-        for (i, r) in enumerate(3:2:(length(sbdry_new.eps)-1))
-            if loss[i] * loss_scaling + imag(sbdry.eps[r]) > 0
-                println("Loss: $(loss[i] * loss_scaling), imag(n): $(imag(n))")
-                return 999
+        eps_new = Array{Complex{Real}, 1}(sbdry.eps)
+        dist_new = Array{Real, 1}(sbdry.distance)
+        if :loss in keys(params)
+            #println("Variation: $(ForwardDiff.value.(params[:loss]))")
+            for (i, r) in enumerate(2:1:(length(eps_new)))
+                initial_loss = imag(sqrt(eps_new[r]))
+                diff = params[:loss][i] + initial_loss
+                if diff > 0# || diff < -10
+                    penalty += (diff * 1e2)^2
+                    #println("Init: $initial_loss\nParam: $(ForwardDiff.value(params[:loss][i]))")
+                    #println("Penalty: $(penalty)")
+                end
+                eps_new[r] = Complex{Real}((sqrt(sbdry.eps[r]) +
+                                                  complex(0, params[:loss][i]))^2)
             end
-            sbdry_new.eps[r] = (sqrt(sbdry.eps[r]) + complex(0, loss[i] * loss_scaling))^2
         end
-        sbdry_new.eps[vcat(1,2:2:end)] = sbdry.eps[vcat(1,2:2:end)]
-        #sbdry_new.eps[3:2:end-1] -= map(l -> complex(0, l), loss)
-        sbdry_new.distance[2:2:end-2] = sbdry.distance[2:2:end-2] + dist_shift
-        sbdry_new.distance[vcat(1:2:end-1, end)] = sbdry.distance[vcat(1:2:end-1, end)]
-        prop_matrix_grid_plot = calc_propagation_matrices_grid(sbdry_new, coords, modes, 0,
-                                                               frequencies, diskR=diskR,
-                                                               prop=prop)
-        prop_matrix_plot = [prop_matrix_grid_plot[r,f,1,1,1,1,:,:]
-                            for r = 1:length(sbdry_new.distance),
-                                f = 1:length(frequencies)]
-        Eout = calc_modes(sbdry_new, coords, modes, frequencies, prop_matrix_plot, m_reflect,
-                                      diskR=diskR, prop=prop)
+        if :spacings in keys(params)
+            dist_new[2:2:end-1] += params[:spacings]
+        end
+        if :antenna in keys(params)
+            if params[:antenna][1] > 5
+                println("5m is unrealistically far for the antenna…")
+                penalty += (params[:antenna][1] - 5)^2
+            end
+            dist_new[end] += params[:antenna][1]
+            # The antenna position is special. Its *absolute* position is important for the
+            # overall phase therefore if we change the spacings we subtract the change here
+            if :spacings in keys(params)
+                dist_new[end] -= sum(params[:spacings])
+            end
+        end
         if fix_phase
-            Eout[2, 1, :] .*= [exp(-1im * sum(dist_shift) / 3e8 * 2 * pi * f)
-                               for f in frequencies]
+            @assert !(:antenna in keys(params)) "Fixing phase doesn't make sense when fitting antenna"
+            #Eout[2, 1, :] .*= [exp(-1im * sum(dist_shift) / 3e8 * 2 * pi * f)
+            #                   for f in frequencies]
+            dist_new[end] -= sum(params[:spacings])
         end
-        cost = ref_comp(Eout, ref)
+        sbdry_new = SeedSetupBoundaries(coords, diskno=div((length(sbdry.eps) - 2), 2),
+                                        distance=dist_new, epsilon=eps_new)
+        #sbdry_new.distance[1:2:end-1] = sbdry.distance[1:2:end-1]
+        n_region = length(sbdry_new.eps)
+        n_freq = length(frequencies)
+        prop_matrices = Array{Array{Complex{Real}, 2}, 2}(undef, n_region, n_freq)
+        for (i, f) in enumerate(frequencies)
+            prop_matrices[:, i] = calc_propagation_matrices(sbdry_new, coords, modes;
+                                                            f=f, prop=prop, diskR=diskR)
+        end
+        Eout = calc_modes(sbdry_new, coords, modes, frequencies, prop_matrices, m_reflect,
+                                      diskR=diskR, prop=prop)
+        cost = ref_comp(Eout, ref) + penalty
+        if cost == NaN
+            println("Got invalid res, penalty: $penalty, input: $(ForwardDiff.value.(dist_shift_scaled))")
+            return Inf
+        end
     end
     return cost
 end;

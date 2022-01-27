@@ -198,7 +198,7 @@ end
 
 function optimize_spacings(p::BoosterParams, fixed_disk::Int;
                            starting_point=zeros(p.n_disk),
-                           variation=fill(100e-6, length(starting_point)),
+                           variation=100e-6,
                            cost_function=cost_fun(p, fixed_disk), n=1024,
                            algorithm=BFGS(linesearch=BackTracking(order=2)),
                            options=Optim.Options(f_tol=1e-6),
@@ -212,7 +212,8 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
         if !stop[]
             # Add some random variation to start spacing.
             # Convergence very much depends on a good start point.
-            x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .* variation
+            x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .*
+                    variation
 
             # Depending on the optimizer we want a differentiable cost function
             cf = @match algorithm begin
@@ -314,7 +315,7 @@ function get_init_spacings(freq, freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5
     #if isfile("results/init_$(freq).txt")
     #    return read_init_spacing_from_file("results/init_$(freq).txt")
     else
-        eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
+        eps = vcat(1e20, n_disk == 0 ? [] : reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
         optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, 50e6, freq_range,
                                       distances_from_spacing(0.0, 2*n_disk + 2), eps,
                                       update_itp=false)
@@ -340,7 +341,7 @@ end
 function get_optim_params(freq; freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9),
                           update_itp=true, epsilon=24, n_disk=20, freq_width=50e6)
 
-    eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
+    eps = vcat(1e20, n_disk == 0 ? [] : reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
     init_spacing = get_init_spacings(freq, n_disk=n_disk, epsilon=epsilon)
     distances = distances_from_spacing(init_spacing, n_disk * 2 + 2)
     optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq, freq_width, freq_range,
