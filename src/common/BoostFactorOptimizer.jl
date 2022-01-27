@@ -101,22 +101,27 @@ function get_penalty(disk1, disk2, p, x, dist; is_min_dist=true)
                              (dist - get_distance(disk1, disk2, p, x))
     #println("Distance between: $disk1 and $disk2: $(get_distance(disk1, disk2, p, x))")
     if dist_rel < 0
-        return Inf
-    elseif dist_rel < 1e-3
-        return (dist_rel * 1e3) ^ 6
+        return (-dist_rel * 1e2) ^ 6
+    #elseif dist_rel < 1e-3
+    #    return ((1e-3 - dist_rel) * 1e3) ^ 6
     end
     return 0
 end
 
 function apply_constraints(p::BoosterParams, x; debug=false)
     penalty = 0.
+    d1 = p.sbdry_init.distance[2] + x[1]
+    if d1 < 0
+        penalty += (-d1 * 1e2) ^ 6
+        println("Disk <-> Mirror $(ForwardDiff.value(penalty))")
+    end
     # Disks are additionally constraint because every 8th disk is on the same rail.
     # Also, two disks have a minimum distance and the booster has a fixed length
     for d = 1:(p.n_disk - 1)
         p1 = d <= p.n_disk - 8 ?
                 get_penalty(d, d + 8, p, x, p.constraints.min_dist_8_disks) : 0
         p2 = get_penalty(d, d + 1, p, x, p.constraints.min_dist_2_disks)
-        if debug
+        if debug && p1 + p2 > 0
             println("Applying penalty of $(p1 + p2)")
         end
         if p1 == Inf || p2 == Inf
@@ -128,7 +133,7 @@ function apply_constraints(p::BoosterParams, x; debug=false)
             penalty += p1 + p2
         end
     end
-    p_length = get_penalty(1, p.n_disk, p, x, p.constraints.max_dist_all_disks,
+    p_length = get_penalty(0, p.n_disk, p, x, p.constraints.max_dist_all_disks,
                            is_min_dist=false)
     if p_length == Inf
         if debug
@@ -160,7 +165,7 @@ function cost_fun(p::BoosterParams, fixed_disk; gradient=false, disable_constrai
 
         penalty = disable_constraints ? 0. : apply_constraints(p, x)
         if penalty == Inf
-            return 1000.
+            return Inf#1000.
         end
 
         if gradient
@@ -267,7 +272,7 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false,
     sbdry_optim.distance[2:2:end-2] .+= spacings
 
     # check that disks didn't move past each other
-    if count(x -> x < 0, sbdry_optim.distance[end - 1]) > 0
+    if count(x -> x < 0, sbdry_optim.distance[1:end - 1]) > 0
         println("We fucked, that's not possible!")
         throw(ArgumentError("Negative relative spacings aren't possible!"))
     end
