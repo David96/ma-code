@@ -19,7 +19,6 @@ end
 
 mutable struct BoosterParams
     n_disk::Int
-    epsilon::Complex
     diskR::Float64
     Mmax::Int
     Lmax::Int
@@ -52,13 +51,13 @@ function init_optimizer(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_wi
         coords = SeedCoordinateSystem(X = [1e-9], Y = [1e-9])
     end
     n_regions = 2 * n_disk + 2
-    thickness_var = zeros(n_regions, 1, 1)
+    thickness_var = zeros(ComplexF64, n_regions, 1, 1)
     sbdry_init = SeedSetupBoundaries(coords, diskno=n_disk, distance=distance, epsilon=eps,
                                      relative_surfaces=thickness_var)
     modes = SeedModes(coords, ThreeDim=three_dims, Mmax = Mmax, Lmax = Lmax, diskR = diskR)
     m_reflect = zeros(Mmax * (2 * Lmax + 1))
     m_reflect[Lmax + 1] = 1.0
-    p = BoosterParams(n_disk, epsilon, diskR, Mmax, Lmax, freq_center, freq_width, freq_optim,
+    p = BoosterParams(n_disk, diskR, Mmax, Lmax, freq_center, freq_width, freq_optim,
                       freq_range, coords, sbdry_init, modes, m_reflect, nothing,
                       three_dims ? propagator : propagator1D, constraints)
     if update_itp
