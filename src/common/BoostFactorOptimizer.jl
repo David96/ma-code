@@ -224,6 +224,7 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
                                                                        autodiff=:forward)
             end
             res = optimize(cf, x_0, algorithm, options)
+            #display(res)
             cost = cost_function(Optim.minimizer(res))
             lock(lk)
             atomic_min!(best_cost, cost)
@@ -283,16 +284,18 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false,
     end
 
     #Calculate prop matrix grid at a dist shift of zero of optimized setup
-    prop_matrix_grid_plot = calc_propagation_matrices_grid(sbdry_optim, p.coords, p.modes, 0,
-                                                           p.freq_range, diskR=p.diskR,
-                                                           prop=p.prop)
-    prop_matrix_plot = [prop_matrix_grid_plot[r,f,1,1,1,1,:,:] for r = 1:(2 * p.n_disk + 2),
-                        f = 1:length(p.freq_range)]
+    n_region = length(sbdry_optim.eps)
+    n_freq = length(p.freq_range)
+    prop_matrices = Array{Array{Complex{Real}, 2}, 2}(undef, n_region, n_freq)
+    for (i, f) in enumerate(p.freq_range)
+        prop_matrices[:, i] = calc_propagation_matrices(sbdry_optim, p.coords, p.modes;
+                                                        f=f, prop=p.prop, diskR=p.diskR)
+    end
     if reflect
-        calc_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrix_plot, p.m_reflect,
+        calc_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrices, p.m_reflect,
                    diskR=p.diskR, prop=p.prop)
     else
-        calc_boostfactor_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrix_plot,
+        calc_boostfactor_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrices,
                                diskR=p.diskR, prop=p.prop)
     end
 end
