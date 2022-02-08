@@ -206,7 +206,7 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
     spacings = Vector{Float64}()
     best_cost = Atomic{Float64}(1002.)
     stop = Atomic{Bool}(false)
-    lk = SpinLock()
+    lk = ReentrantLock()
     # Run initial optimization a few times and pick the best one
     @threads for i in 1:n
         if !stop[]
@@ -226,16 +226,16 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
             res = optimize(cf, x_0, algorithm, options)
             #display(res)
             cost = cost_function(Optim.minimizer(res))
-            lock(lk)
             atomic_min!(best_cost, cost)
             if atomic_cas!(best_cost, cost, cost) === cost
-                spacings = Optim.minimizer(res)
-                if cost < threshold_cost
-                    println("Reached threshold at $i")
-                    stop[] = true
+                lock(lk) do
+                    spacings = Optim.minimizer(res)
+                    if cost < threshold_cost
+                        println("Reached threshold at $i")
+                        stop[] = true
+                    end
                 end
             end
-            unlock(lk)
         end
     end
     println("Best cost: $best_cost")
