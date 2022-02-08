@@ -113,7 +113,9 @@ function apply_constraints(p::BoosterParams, x; debug=false)
     d1 = p.sbdry_init.distance[2] + x[1]
     if d1 < 0
         penalty += (-d1 * 1e2) ^ 6
-        println("Disk <-> Mirror $(ForwardDiff.value(penalty))")
+        if debug
+            println("Disk <-> Mirror $(ForwardDiff.value(penalty))")
+        end
     end
     # Disks are additionally constraint because every 8th disk is on the same rail.
     # Also, two disks have a minimum distance and the booster has a fixed length
@@ -146,6 +148,75 @@ function apply_constraints(p::BoosterParams, x; debug=false)
     return penalty
 end
 
+function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1}, p::BoosterParams;
+                ref=nothing, fix_phase=false,
+                ref_comp=(eout, ref) -> sum(abs2.(eout[2, :, :] - ref)),
+                parameters::OrderedDict=OrderedDict(:spacings => length(dist_shift)),
+                scaling=fill(1, length(dist_shift))) where T<:Real
+    #dist_bound_hard = Interpolations.bounds(itp)[3]
+    dist_shift_scaled = dist_shift .* scaling
+    params = extract_params(dist_shift_scaled, parameters)
+
+    if false
+        println("Shift: $(ForwardDiff.value.(dist_shift))")
+        println("Spacings: $(ForwardDiff.value.(params[:spacings]))")
+        #println("Loss: $(ForwardDiff.value.(params[:loss]))")
+        println("Antenna: $(ForwardDiff.value.(params[:antenna]))")
+        println("Scalings: $scaling")
+    end
+
+    #Return hard penalty when exceeding interpolation bounds
+    #if any(.!(dist_bound_hard[1] .< spacings[1:end-1] .< dist_bound_hard[2])) 
+        #return 1001.0
+    #end
+    #Add soft penalty when approaching interpolation bounds
+    #penalty = soft_box_penalty(spacings[1:end-1],dist_bound_hard)
+    penalty = 0
+
+    if ref === nothing
+        @assert :spacings in keys(params) && :loss in keys(params)
+        prop_matrices_set_interp = interpolate_prop_matrix(p.itp_sub, params[:spacings],
+                                                           params[:loss])
+        Eout = calc_boostfactor_modes(p.sbdry, p.coords, p.modes, p.freq_optim,
+                                      prop_matrices_set_interp, diskR=p.diskR, prop=p.prop)
+        cpld_pwr = abs2.(sum(conj.(Eout[1,:,:]).*p.m_reflect, dims=1)[1,:])
+        cost =  -p_norm(cpld_pwr,-20)*penalty
+    elseif ref !== nothing
+        # Make sure to create SetupBoundaries{Real} to fit the ForwardDiff.Dual type
+        eps_new = Array{Complex{Real}, 1}(p.sbdry_init.eps)
+        dist_new = Array{Real, 1}(p.sbdry_init.distance)
+        p_new = deepcopy(p)
+        p_new.sbdry_init = SeedSetupBoundaries(p.coords, diskno=p.n_disk, distance=dist_new,
+                                               epsilon=eps_new)
+        apply_optim_res!(p_new, dist_shift_scaled, parameters)
+        if :loss in keys(params)
+            for eps in eps_new[2:end]
+                loss = imag(sqrt(eps))
+                if loss > 0
+                    penalty += (diff * 1e2)^2
+                end
+            end
+        end
+        if :antenna in keys(params)
+            if params[:antenna][1] > 5
+                println("5m is unrealistically far for the antenna…")
+                penalty += (params[:antenna][1] - 5)^2
+            end
+        end
+        if fix_phase
+            @assert !(:antenna in keys(params)) "Fixing phase doesn't make sense when fitting antenna"
+            p_new.sbdry_init.distance[end] -= sum(params[:spacings])
+        end
+        eout = calc_eout(p_new, zeros(p_new.n_disk), reflect=true, disable_constraints=true)
+        cost = ref_comp(eout, ref) + penalty
+        if cost == NaN
+            println("Got invalid res, penalty: $penalty, input: $(ForwardDiff.value.(dist_shift_scaled))")
+            return Inf
+        end
+    end
+    return cost
+end
+
 function cost_fun(p::BoosterParams, fixed_disk; gradient=false, disable_constraints=false,
                   kwargs...)
     return x -> begin
@@ -169,13 +240,10 @@ function cost_fun(p::BoosterParams, fixed_disk; gradient=false, disable_constrai
         end
 
         if gradient
-            cost, grad = calc_boostfactor_cost_gradient(x, p.itp_sub, p.freq_optim, p.sbdry_init,
-                                                        p.coords, p.modes, p.m_reflect,
-                                                        diskR=p.diskR, prop=p.prop)
+            cost, grad = calc_boostfactor_cost_gradient(x, p)
             cost + penalty, grad
         else
-            calc_boostfactor_cost(x, p.itp_sub, p.freq_optim, p.sbdry_init, p.coords, p.modes,
-                                  p.m_reflect; diskR=p.diskR, prop=p.prop, kwargs...) + penalty
+            calc_boostfactor_cost(x, p; kwargs...) + penalty
         end
     end
 end
@@ -203,8 +271,8 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
                            algorithm=BFGS(linesearch=BackTracking(order=2)),
                            options=Optim.Options(f_tol=1e-6),
                            threshold_cost=-Inf)
-    spacings = Vector{Float64}()
     best_cost = Atomic{Float64}(1002.)
+    best_res = nothing
     stop = Atomic{Bool}(false)
     lk = ReentrantLock()
     # Run initial optimization a few times and pick the best one
@@ -229,7 +297,7 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
             atomic_min!(best_cost, cost)
             if atomic_cas!(best_cost, cost, cost) === cost
                 lock(lk) do
-                    spacings = Optim.minimizer(res)
+                    best_res = res
                     if cost < threshold_cost
                         println("Reached threshold at $i")
                         stop[] = true
@@ -238,8 +306,9 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
             end
         end
     end
+    display(best_res)
     println("Best cost: $best_cost")
-    spacings
+    Optim.minimizer(best_res)
 end
 
 spacings_with_fd(spacings, fd) = vcat(spacings[1:fd - 1],
@@ -274,7 +343,7 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false,
     sbdry_optim.distance[2:2:end-2] .+= spacings
 
     # check that disks didn't move past each other
-    if count(x -> x < 0, sbdry_optim.distance[1:end - 1]) > 0
+    if !disable_constraints && count(x -> x < 0, sbdry_optim.distance[1:end - 1]) > 0
         println("We fucked, that's not possible!")
         throw(ArgumentError("Negative relative spacings aren't possible!"))
     end
@@ -352,6 +421,45 @@ function get_optim_params(freq; freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e
                                   constraints = BoosterConstraints(0., 0., 100.))
 
     return optim_params
+end
+
+function apply_optim_res(p::BoosterParams, args...)
+    tmp = deepcopy(p)
+    apply_optim_res!(tmp, args...)
+    tmp
+end
+
+apply_optim_res!(p::BoosterParams, res, fit_params) = apply_optim_res!(p,
+                                                            extract_params(res, fit_params))
+function apply_optim_res!(p::BoosterParams, params)
+    if :spacings in keys(params)
+        p.sbdry_init.distance[2:2:end-1] .+= params[:spacings]
+    end
+    if :loss in keys(params)
+        losses = params[:loss]
+        for (i, r) in enumerate(2:1:(length(p.sbdry_init.eps)))
+            p.sbdry_init.eps[r] = (sqrt(p.sbdry_init.eps[r]) + complex(0, losses[i]))^2
+        end
+    end
+    if :antenna in keys(params)
+        p.sbdry_init.distance[end] += params[:antenna][1]
+
+        # The antenna position is special. Its *absolute* position is important for the
+        # overall phase therefore if we change the spacings we subtract the change here
+        if :spacings in keys(params)
+            p.sbdry_init.distance[end] -= sum(params[:spacings])
+        end
+    end
+end
+
+function extract_params(res, fit_params)
+    params = Dict()
+    offset = 1
+    for (param, n) in fit_params
+        params[param] = res[offset:offset+n-1]
+        offset += n
+    end
+    params
 end
 
 function group_delay(refl, df)
