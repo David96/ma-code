@@ -188,7 +188,7 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1}, p::BoosterParams
         p_new = deepcopy(p)
         p_new.sbdry_init = SeedSetupBoundaries(p.coords, diskno=p.n_disk, distance=dist_new,
                                                epsilon=eps_new)
-        apply_optim_res!(p_new, dist_shift_scaled, parameters)
+        apply_optim_res!(p_new, params)
         if :loss in keys(params)
             for eps in eps_new[2:end]
                 loss = imag(sqrt(eps))
@@ -198,15 +198,14 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1}, p::BoosterParams
             end
         end
         if :antenna in keys(params)
-            if params[:antenna][1] > 5
-                println("5m is unrealistically far for the antenna…")
-                penalty += (params[:antenna][1] - 5)^2
+            if params[:antenna][1] > 0.5
+                penalty += (params[:antenna][1] - 0.5)^2
             end
         end
-        if fix_phase
-            @assert !(:antenna in keys(params)) "Fixing phase doesn't make sense when fitting antenna"
-            p_new.sbdry_init.distance[end] -= sum(params[:spacings])
-        end
+        #if fix_phase
+        #    @assert !(:antenna in keys(params)) "Fixing phase doesn't make sense when fitting antenna"
+        #    p_new.sbdry_init.distance[end] -= sum(params[:spacings])
+        #end
         eout = calc_eout(p_new, zeros(p_new.n_disk), reflect=true, disable_constraints=true)
         cost = ref_comp(eout, ref) + penalty
         if cost == NaN
@@ -271,7 +270,7 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
                            algorithm=BFGS(linesearch=BackTracking(order=2)),
                            options=Optim.Options(f_tol=1e-6),
                            threshold_cost=-Inf)
-    best_cost = Atomic{Float64}(1002.)
+    best_cost = Atomic{Float64}(Inf)
     best_res = nothing
     stop = Atomic{Bool}(false)
     lk = ReentrantLock()
@@ -443,12 +442,12 @@ function apply_optim_res!(p::BoosterParams, params)
     end
     if :antenna in keys(params)
         p.sbdry_init.distance[end] += params[:antenna][1]
+    end
 
-        # The antenna position is special. Its *absolute* position is important for the
-        # overall phase therefore if we change the spacings we subtract the change here
-        if :spacings in keys(params)
-            p.sbdry_init.distance[end] -= sum(params[:spacings])
-        end
+    # The antenna position is special. Its *absolute* position is important for the
+    # overall phase therefore if we change the spacings we subtract the change here
+    if :spacings in keys(params)
+        p.sbdry_init.distance[end] -= sum(params[:spacings])
     end
 end
 
