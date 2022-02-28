@@ -40,17 +40,17 @@ function calc_C_matrix(x_0, p::BoosterParams; M=1000, variation = 50-6, cost_fun
     else
         f = x -> grad_cost_fun(x, p, cost=cost_fun)
     end
-    integral, error = hcubature((x) -> f(x) * transpose(f(x)) / variation^p.n_disk, x_0 .- variation / 2,
-                         x_0 .+ variation / 2, rtol = 0.05,
-                         norm=a -> sum([x*x for x in a]))
-    display(integral)
-    display(sqrt(error))
-    return integral
+    #integral, error = hcubature((x) -> f(x) * transpose(f(x)) / variation^p.n_disk, x_0 .- variation / 2,
+    #                     x_0 .+ variation / 2, rtol = 0.05,
+    #                     norm=a -> sum([x*x for x in a]))
+    #display(integral)
+    #display(sqrt(error))
+    #return integral
     while true
-        C_matrix = zeros(p.n_disk, p.n_disk)
+        C_matrix = zeros(length(x_0), length(x_0))
 
-        for i=1:M
-            x_i = x_0 .+ 2 .* (rand(p.n_disk).-0.5) .* variation
+        for _=1:M
+            x_i = x_0 .+ 2 .* (rand(length(x_0)).-0.5) .* variation
             if cost_fun !== nothing
                 grad = grad_cost_fun(x_i, p, cost=cost_fun)
             else
@@ -66,9 +66,9 @@ function calc_C_matrix(x_0, p::BoosterParams; M=1000, variation = 50-6, cost_fun
 end
 
 function calc_eigendirections(freq, optim_params = get_optim_params(freq);
-        M=2000, variation = 50e-6, cost_fun=nothing)
+        M=2000, variation = 50e-6, cost_fun=nothing, n_params=optim_params.n_disk)
     #Eigenvalue decomposition
-    C_matrix = calc_C_matrix(zeros(optim_params.n_disk), optim_params, M=M, variation=variation,
+    C_matrix = calc_C_matrix(zeros(n_params), optim_params, M=M, variation=variation,
                              cost_fun=cost_fun)
     eigen_decomp = eigen(C_matrix)
     eigenvalues = eigen_decomp.values

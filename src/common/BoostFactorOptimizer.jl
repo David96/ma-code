@@ -247,8 +247,7 @@ function cost_fun(p::BoosterParams, fixed_disk; gradient=false, disable_constrai
     end
 end
 
-function cost_fun_rot(p::BoosterParams, eigendirections; kwargs...)
-    cf = cost_fun(p, 0; kwargs...)
+function cost_fun_rot(eigendirections, cf)
     return x -> begin
         x_r = eigendirections[:,1:length(x)] * x
         return cf(x_r)
