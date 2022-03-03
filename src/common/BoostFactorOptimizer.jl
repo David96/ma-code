@@ -268,7 +268,8 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
                            cost_function=cost_fun(p, fixed_disk), n=1024,
                            algorithm=BFGS(linesearch=BackTracking(order=2)),
                            options=Optim.Options(f_tol=1e-6),
-                           threshold_cost=-Inf)
+                           threshold_cost=-Inf,
+                           fixed_variation=nothing)
     best_cost = Atomic{Float64}(Inf)
     best_res = nothing
     stop = Atomic{Bool}(false)
@@ -278,8 +279,11 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
         if !stop[]
             # Add some random variation to start spacing.
             # Convergence very much depends on a good start point.
-            x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .*
-                    variation
+            if fixed_variation !== nothing
+                x_0 = starting_point .+ fixed_variation[i]
+            else
+                x_0 = starting_point .+ 2 .* (rand(length(starting_point)).-0.5) .* variation
+            end
 
             # Depending on the optimizer we want a differentiable cost function
             cf = @match algorithm begin
