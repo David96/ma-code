@@ -103,16 +103,16 @@ function optimize_bf_with_eigendirections(freq, optim_params = get_optim_params(
     end
     if n_dim == 0
         time = @elapsed optim_spacings =
-                            optimize_spacings(optim_params, 0, n=n, algorithm=algorithm,
+                            Optim.minimizer(optimize_spacings(optim_params, 0, n=n, algorithm=algorithm,
                                               options=options, starting_point=starting_point,
                                               cost_function=cost_fun(optim_params, 0;
-                                                                     kwargs...))
+                                                                     kwargs...)))
     else
         time = @elapsed optim_spacings =
-                            optimize_spacings(optim_params, 0, n=n, algorithm=algorithm,
+                            Optim.minimizer(optimize_spacings(optim_params, 0, n=n, algorithm=algorithm,
                                               options=options, starting_point=starting_point,
                                               cost_function=cost_fun_rot(optim_params,
-                                                                    eigendirections; kwargs...))
+                                                                         eigendirections; kwargs...)))
         # optim_spacings = eigendirections[:,1:length(optim_spacings)] * optim_spacings
     end
     time, optim_spacings

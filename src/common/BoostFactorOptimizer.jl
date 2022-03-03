@@ -306,7 +306,7 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
     end
     display(best_res)
     println("Best cost: $best_cost")
-    Optim.minimizer(best_res)
+    best_res
 end
 
 spacings_with_fd(spacings, fd) = vcat(spacings[1:fd - 1],

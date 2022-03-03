@@ -15,7 +15,7 @@ epsilon = 24
 eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
 
 function json_to_ed(json)
-    reshape(reduce(vcat, convert(Vector{Vector{Float64}}, json)), (20, 20))
+    reshape(reduce(vcat, convert(Vector{Vector{Float64}}, json)), (length(json), length(json)))
 end
 
 function plot_dims(dir, freq; area=true)
