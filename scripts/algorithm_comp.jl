@@ -1,7 +1,5 @@
 #!/usr/bin/env julia
 
-using Pkg
-Pkg.activate("..")
 using Distributed, SlurmClusterManager
 
 if haskey(ENV, "SLURM_AVAILABLE") && ENV["SLURM_AVAILABLE"] == "true"
@@ -9,8 +7,6 @@ if haskey(ENV, "SLURM_AVAILABLE") && ENV["SLURM_AVAILABLE"] == "true"
 end
 
 @everywhere begin
-    using Pkg
-    Pkg.activate("..")
     using Thesis, OrderedCollections, LineSearches, Optim
 end
 
@@ -18,7 +14,7 @@ n_disk = 20
 n = 1
 N = 1000
 x_tol = 1e-6
-g_tol = 1e-8
+g_tol = 1e-6
 freq = 22e9
 
 p0 = get_optim_params(freq, n_disk=n_disk, update_itp=false)
@@ -35,20 +31,21 @@ results = @distributed (vcat) for i = 1:N
         algorithm=NelderMead(),
         options=Optim.Options(iterations=5000, g_tol=g_tol, f_tol=0, x_tol=0, show_trace=false),
         fixed_variation=fixed_var, cost_function=cf, n=n)
-    {:bfgs => {:spacings => Optim.minimizer(spacings_bfgs),
+    println("Finished optimization $i, bfgs vs nm: $(Optim.minimum(spacings_bfgs)) vs $(Optim.minimum(spacings_nm))")
+    Dict(:bfgs => Dict(:spacings => Optim.minimizer(spacings_bfgs),
                :f_calls => Optim.f_calls(spacings_bfgs),
                :g_calls => Optim.g_calls(spacings_bfgs),
-               :minimum => Optim.minimum(spacings_bfgs)}
-     :nm => {:spacings => Optim.minimizer(spacings_nm),
+               :minimum => Optim.minimum(spacings_bfgs)),
+     :nm => Dict(:spacings => Optim.minimizer(spacings_nm),
              :f_calls => Optim.f_calls(spacings_nm),
-             :minimum => Optim.minimum(spacings_nm)}}
+             :minimum => Optim.minimum(spacings_nm)))
 
 end
 
-write_json("results/bfgs_vs_nm.json",
-           { :freq => freq,
-             :n => n,
-             :N => N,
-             :x_tol => x_tol,
-             :g_tol => g_tol,
-             :results => results })
+write_json("scripts/results/bfgs_vs_nm.json",
+           Dict(:freq => freq,
+                :n => n,
+                :N => N,
+                :x_tol => x_tol,
+                :g_tol => g_tol,
+                :results => results))
