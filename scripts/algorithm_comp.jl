@@ -28,11 +28,11 @@ results = @distributed (vcat) for i = 1:N
     spacings_bfgs = optimize_spacings(p0, 0,
         algorithm=BFGS(linesearch=BackTracking(order=2)),
         options=Optim.Options(iterations=5000, f_tol=0, g_tol=0, x_tol=x_tol, show_trace=false),
-        n=100, variation=1e-4, cost_function=cf, n=n)
+        n=100, fixed_variation=fixed_var, cost_function=cf, n=n)
     spacings_nm = optimize_spacings(p0, 0,
         algorithm=NelderMead(),
         options=Optim.Options(iterations=5000, g_tol=g_tol, f_tol=0, x_tol=0, show_trace=false),
-        n=100, variation=1e-4, cost_function=cf, n=n)
+        n=100, fixed_variation=fixed_var, cost_function=cf, n=n)
     {:bfgs => {:spacings => Optim.minimizer(spacings_bfgs),
                :f_calls => Optim.f_calls(spacings_bfgs),
                :g_calls => Optim.g_calls(spacings_bfgs),
