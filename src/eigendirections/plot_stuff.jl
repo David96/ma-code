@@ -8,17 +8,16 @@ using LsqFit
 plotly()
 default(leg=false, titlefont=font(family="sans-serif", pointsize=10), markerstrokecolor=:auto)
 
-n_disk = 20
-n_region = 2 * n_disk + 2
-epsilon = 24
-
-eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
-
 function json_to_ed(json)
     reshape(reduce(vcat, convert(Vector{Vector{Float64}}, json)), (length(json), length(json)))
 end
 
 function plot_dims(dir, freq; area=true)
+    n_disk = 20
+    n_region = 2 * n_disk + 2
+    epsilon = 24
+
+    eps = vcat(1e20, reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
     #pyplot()
     ax1 = plot(ylabel="Boostfactor Magnitude", xlabel="Dimensions", xlims=(0.5, 20.5),
                xticks=1:20, leg=:bottomright)
