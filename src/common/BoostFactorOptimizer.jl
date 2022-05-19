@@ -29,6 +29,7 @@ mutable struct BoosterParams
     coords
     sbdry_init
     σ_mirror
+    global_phase
     modes
     m_reflect
     itp_sub
@@ -40,7 +41,7 @@ get_freq_optim(center, width; length=32) = range(center - width / 2, stop=center
                                                 length=length)
 
 function init_optimizer(n_disk, diskR, Mmax, Lmax, freq_center, freq_width, freq_range,
-        distance, eps, σ_mirror=1e30; three_dims=false, constraints=BoosterConstraints(6e-3, 48e-3, 304e-3),
+        distance, eps, σ_mirror=1e30, global_phase=0; three_dims=false, constraints=BoosterConstraints(6e-3, 48e-3, 304e-3),
         update_itp=true)
     freq_optim = get_freq_optim(freq_center, freq_width)
     if three_dims
@@ -59,8 +60,8 @@ function init_optimizer(n_disk, diskR, Mmax, Lmax, freq_center, freq_width, freq
     m_reflect = zeros(Mmax * (2 * Lmax + 1))
     m_reflect[Lmax + 1] = 1.0
     p = BoosterParams(n_disk, diskR, Mmax, Lmax, freq_center, freq_width, freq_optim,
-                      freq_range, coords, sbdry_init, σ_mirror, modes, m_reflect, nothing,
-                      three_dims ? propagator : propagator1D, constraints)
+                      freq_range, coords, sbdry_init, σ_mirror, global_phase, modes, m_reflect,
+                      nothing, three_dims ? propagator : propagator1D, constraints)
     if update_itp
         update_itp_sub(p)
     end
@@ -284,7 +285,7 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
             end
             res = optimize(cf, x_0, algorithm, options)
             #display(res)
-            cost = cost_function(Optim.minimizer(res))
+            cost = Optim.minimum(res)
             atomic_min!(best_cost, cost)
             if atomic_cas!(best_cost, cost, cost) === cost
                 lock(lk) do
@@ -348,16 +349,16 @@ function calc_eout(p::BoosterParams, spacings; fixed_disk=0, reflect=false,
     n_freq = length(p.freq_range)
     prop_matrices = Array{Array{Complex{Real}, 2}, 2}(undef, n_region, n_freq)
     for (i, f) in enumerate(p.freq_range)
-        sbdry_optim.eps[1] = complex(1, p.σ_mirror / (2pi * f))
+        #sbdry_optim.eps[1] = complex(1, -p.σ_mirror / (2pi * f))
         prop_matrices[:, i] = calc_propagation_matrices(sbdry_optim, p.coords, p.modes;
                                                         f=f, prop=p.prop, diskR=p.diskR)
     end
     if reflect
         calc_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrices, p.m_reflect,
-                   diskR=p.diskR, prop=p.prop)
+                   diskR=p.diskR, prop=p.prop) .* exp(1im * p.global_phase)
     else
         calc_boostfactor_modes(sbdry_optim, p.coords, p.modes, p.freq_range, prop_matrices,
-                               diskR=p.diskR, prop=p.prop)
+                               diskR=p.diskR, prop=p.prop) .* exp(1im * p.global_phase)
     end
 end
 
@@ -434,7 +435,7 @@ function apply_optim_res!(p::BoosterParams, params)
         end
     end
     if :ren in keys(params)
-        rens = params[:rens]
+        rens = params[:ren]
         for (i, r) in enumerate(2:(length(p.sbdry_init.eps)))
             p.sbdry_init.eps[r] = (sqrt(p.sbdry_init.eps[r]) + complex(rens[i], 0))^2
         end
@@ -444,6 +445,9 @@ function apply_optim_res!(p::BoosterParams, params)
     end
     if :σ_mirror in keys(params)
         p.σ_mirror = params[:σ_mirror][1]
+    end
+    if :global_phase in keys(params)
+        p.global_phase = params[:global_phase][1]
     end
 
     # The antenna position is special. Its *absolute* position is important for the

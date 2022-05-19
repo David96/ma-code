@@ -7,8 +7,6 @@ using LinearAlgebra
 using Statistics
 using LsqFit
 
-epsilon = 24
-
 #Gradient of cost function
 function grad_cost_fun(x, p::BoosterParams; cost=nothing)
     if cost !== nothing
