@@ -1,6 +1,7 @@
 using BoostFractor
 using Glob
-using PyPlot
+using Plots
+using Thesis
 
 #freq = ARGS[1]
 #shift = ARGS[2]
@@ -20,7 +21,7 @@ end
 
 n_disk = 20
 n_region = 2 * n_disk + 2
-epsilon = 24
+epsilon = complex(24, -0)
 
 freq_center = parse(Float64, freq)
 freq_range = (freq_center - 0.5e9):0.004e9:(freq_center + 0.5e9)
@@ -31,7 +32,7 @@ init_spacings = read_optim_spacing_from_file("results/optim_$(freq)_v1.txt")
 
 distances = distances_from_spacing(init_spacings)
 
-optim_params = init_optimizer(n_disk, epsilon, 0.15, 1, 0, freq_center, 50e6, freq_range,
+optim_params = init_optimizer(n_disk, 0.15, 1, 0, freq_center, 50e6, freq_range,
                               distances, eps)
 
 # %%
@@ -155,7 +156,7 @@ function plot_bf_quality(fixed_disks, shift_range; area=true)
         end
     end
     #figure().set_size_inches(12, 10)
-    ax = subplot(1, 1, 1)
+    #=ax = subplot(1, 1, 1)
     #println(qualities)
     for quality in qualities
         ax.plot(shift_range .* 1e-9, quality)
@@ -168,7 +169,8 @@ function plot_bf_quality(fixed_disks, shift_range; area=true)
     #grid(xdata=shift_range .* 1e-6, ydata=0.65:0.05:1.15)
     ax.grid(which="minor", alpha=0.2)
     ax.grid(which="major", alpha=0.5)
-    ax.set_ylim(0.40, 1.1)
+    ax.set_ylim(0.40, 1.1)=#
+    plot(shift_range .* 1e-9, hcat(qualities...), ylim=(0.4, 1.1))
 end
 
 function plot_modes(freq, mmax, lmax)

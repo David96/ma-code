@@ -14,9 +14,9 @@ function grad_cost_fun(x, p::BoosterParams; cost=nothing)
     if cost !== nothing
         ForwardDiff.gradient(cost, x)
     else
-        #ForwardDiff.gradient(cost_fun(p, 0), x)
-        _, grad = cost_fun(p, 0, gradient=true)(x)
-        return grad[1:p.n_disk]
+        ForwardDiff.gradient(cost_fun(p, 0), x)
+        #_, grad = cost_fun(p, 0, gradient=true)(x)
+        #return grad[1:p.n_disk]
     end
 end
 

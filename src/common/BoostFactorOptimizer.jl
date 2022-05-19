@@ -101,19 +101,20 @@ function get_penalty(disk1, disk2, p, x, dist; is_min_dist=true)
     dist_rel = is_min_dist ? (get_distance(disk1, disk2, p, x) - dist) :
                              (dist - get_distance(disk1, disk2, p, x))
     #println("Distance between: $disk1 and $disk2: $(get_distance(disk1, disk2, p, x))")
-    if dist_rel < 0
-        return (-dist_rel * 1e6) ^ 2
-    #elseif dist_rel < 1e-3
-    #    return ((1e-3 - dist_rel) * 1e3) ^ 6
+    #if dist_rel < 0
+        #return Inf
+        #return (-dist_rel * 1e6) ^ 2
+    if dist_rel < 1e-6
+        return ((1e-6 - dist_rel) * 1e8) ^ 6
     end
     return 0
 end
 
 function apply_constraints(p::BoosterParams, x; debug=false)
     penalty = 0.
-    d1 = p.sbdry_init.distance[2] + x[1]
-    if d1 < 0
-        penalty += (-d1 * 1e6) ^ 2
+    d1 = p.sbdry_init.distance[2] + x[1] - (p.constraints.min_dist_2_disks - 1e-3)
+    if d1 < 1e-6
+        penalty += ((1e-6 - d1) * 1e8) ^ 6
         if debug
             println("Disk <-> Mirror $(ForwardDiff.value(penalty))")
         end
@@ -284,7 +285,7 @@ function optimize_spacings(p::BoosterParams, fixed_disk::Int;
             end
             res = optimize(cf, x_0, algorithm, options)
             #display(res)
-            cost = cost_function(Optim.minimizer(res))
+            cost = Optim.minimum(res) 
             atomic_min!(best_cost, cost)
             if atomic_cas!(best_cost, cost, cost) === cost
                 lock(lk) do
@@ -310,10 +311,10 @@ function calc_real_bf_cost(p::BoosterParams, spacings; fixed_disk=0, area=true)
     if fixed_disk > 0
         spacings = spacings_with_fd(spacings, fixed_disk)
     end
-    penalty = apply_constraints(p, spacings)
-    if penalty == Inf
-        return 1000
-    end
+    #penalty = apply_constraints(p, spacings)
+    #if penalty == Inf
+    #    return 1000
+    #end
     p1 = deepcopy(p)
     p1.freq_range = p1.freq_optim
     eout = calc_eout(p1, spacings, fixed_disk=0)
@@ -404,13 +405,14 @@ function get_init_spacings(freq, freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5
 end
 
 function get_optim_params(freq; freq_range = (freq - 0.5e9):0.004e9:(freq + 0.5e9),
-                          update_itp=true, epsilon=complex(24, 0), n_disk=20, freq_width=50e6)
+                          update_itp=true, epsilon=complex(24, 0), n_disk=20, freq_width=50e6,
+                          Mmax=1, kwargs...)
 
     eps = vcat(1e20, n_disk == 0 ? [] : reduce(vcat, [1, epsilon] for i in 1:n_disk), 1)
     init_spacing = get_init_spacings(freq, n_disk=n_disk, epsilon=epsilon)
     distances = distances_from_spacing(init_spacing, n_disk * 2 + 2)
-    optim_params = init_optimizer(n_disk, 0.15, 1, 0, freq, freq_width, freq_range,
-                                  distances, eps, update_itp=update_itp)
+    optim_params = init_optimizer(n_disk, 0.15, Mmax, 0, freq, freq_width, freq_range,
+                                  distances, eps; update_itp=update_itp, kwargs...)
 
     return optim_params
 end
