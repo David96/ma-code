@@ -430,10 +430,16 @@ function apply_optim_res!(p::BoosterParams, params)
     if :spacings in keys(params)
         p.sbdry_init.distance[2:2:end-1] .+= params[:spacings]
     end
-    if :loss in keys(params)
-        losses = params[:loss]
-        for (i, r) in enumerate(2:1:(length(p.sbdry_init.eps)))
-            p.sbdry_init.eps[r] = (sqrt(p.sbdry_init.eps[r]) + complex(0, losses[i]))^2
+    if :air_loss in keys(params)
+        losses = params[:air_loss]
+        for (i, l) in enumerate(losses)
+            p.sbdry_init.eps[2i] = (sqrt(p.sbdry_init.eps[2i]) + complex(0, l))^2
+        end
+    end
+    if :disk_loss in keys(params)
+        losses = params[:disk_loss]
+        for (i, l) in enumerate(losses)
+            p.sbdry_init.eps[2i + 1] = (sqrt(p.sbdry_init.eps[2i + 1]) + complex(0, l))^2
         end
     end
     if :ren in keys(params)
