@@ -6,8 +6,8 @@ function distances_from_spacing(init_spacing::Float64, n_region::Int)
     return distance
 end
 
-function distances_from_spacing(init_spacing::Vector{Float64})
-    vcat(0, reduce(vcat, [spacing, 1e-3] for spacing in init_spacing), 0)
+function distances_from_spacing(init_spacing::Vector{Float64}; thickness=1e-3)
+    vcat(0, reduce(vcat, [spacing, thickness] for spacing in init_spacing), 0)
 end
 
 # The distances are measured from disk_a-left to disk_b-left
@@ -22,8 +22,6 @@ mutable struct BoosterParams
     diskR::Float64
     Mmax::Int
     Lmax::Int
-    freq_center::Float64
-    freq_width::Float64
     freq_optim
     freq_range
     coords
@@ -40,10 +38,9 @@ end
 get_freq_optim(center, width; length=32) = range(center - width / 2, stop=center + width / 2,
                                                 length=length)
 
-function init_optimizer(n_disk, diskR, Mmax, Lmax, freq_center, freq_width, freq_range,
-        distance, eps, σ_mirror=1e30, global_phase=0; three_dims=false, constraints=BoosterConstraints(6e-3, 48e-3, 304e-3),
-        update_itp=true)
-    freq_optim = get_freq_optim(freq_center, freq_width)
+function init_optimizer(n_disk, diskR, Mmax, Lmax, freq_range, freq_optim, distance, eps;
+        σ_mirror=1e30, global_phase=0, three_dims=false,
+        constraints=BoosterConstraints(6e-3, 48e-3, 304e-3), update_itp=false)
     if three_dims
         dx = 0.007
         X = -0.5:dx:0.5
@@ -59,9 +56,9 @@ function init_optimizer(n_disk, diskR, Mmax, Lmax, freq_center, freq_width, freq
     modes = SeedModes(coords, ThreeDim=three_dims, Mmax = Mmax, Lmax = Lmax, diskR = diskR)
     m_reflect = zeros(Mmax * (2 * Lmax + 1))
     m_reflect[Lmax + 1] = 1.0
-    p = BoosterParams(n_disk, diskR, Mmax, Lmax, freq_center, freq_width, freq_optim,
-                      freq_range, coords, sbdry_init, σ_mirror, global_phase, modes, m_reflect,
-                      nothing, three_dims ? propagator : propagator1D, constraints)
+    p = BoosterParams(n_disk, diskR, Mmax, Lmax, freq_optim, freq_range, coords, sbdry_init,
+                      σ_mirror, global_phase, modes, m_reflect, nothing,
+                      three_dims ? propagator : propagator1D, constraints)
     if update_itp
         update_itp_sub(p)
     end
@@ -93,14 +90,14 @@ function update_distances(params::BoosterParams, distances::Vector; update_itp=t
     end
 end
 
-function get_distance(a::Int, b::Int, p::BoosterParams, spacings)
-    return a < b ? (sum(p.sbdry_init.distance[2a + 1:2b]) + sum(spacings[a + 1:b])) :
-                   (sum(p.sbdry_init.distance[2b + 1:2a]) + sum(spacings[b + 1:a]))
+function get_distance(a::Int, b::Int, p::BoosterParams)
+    return a < b ? (sum(p.sbdry_init.distance[2a + 1:2b])) :
+                   (sum(p.sbdry_init.distance[2b + 1:2a]))
 end
 
 function get_penalty(disk1, disk2, p, x, dist; is_min_dist=true)
-    dist_rel = is_min_dist ? (get_distance(disk1, disk2, p, x) - dist) :
-                             (dist - get_distance(disk1, disk2, p, x))
+    dist_rel = is_min_dist ? (get_distance(disk1, disk2, p) - dist) :
+                             (dist - get_distance(disk1, disk2, p))
     #println("Distance between: $disk1 and $disk2: $(get_distance(disk1, disk2, p, x))")
     #if dist_rel < 0
         #return Inf
@@ -111,9 +108,9 @@ function get_penalty(disk1, disk2, p, x, dist; is_min_dist=true)
     return 0
 end
 
-function apply_constraints(p::BoosterParams, x; debug=false)
+function apply_constraints(p::BoosterParams; debug=false)
     penalty = 0.
-    d1 = p.sbdry_init.distance[2] + x[1] - (p.constraints.min_dist_2_disks - 1e-3)
+    d1 = p.sbdry_init.distance[2] - (p.constraints.min_dist_2_disks - 1e-3)
     if d1 < 1e-6
         penalty += ((1e-6 - d1) * 1e8) ^ 6
         if debug
@@ -124,8 +121,8 @@ function apply_constraints(p::BoosterParams, x; debug=false)
     # Also, two disks have a minimum distance and the booster has a fixed length
     for d = 1:(p.n_disk - 1)
         p1 = d <= p.n_disk - 8 ?
-                get_penalty(d, d + 8, p, x, p.constraints.min_dist_8_disks) : 0
-        p2 = get_penalty(d, d + 1, p, x, p.constraints.min_dist_2_disks)
+                get_penalty(d, d + 8, p, p.constraints.min_dist_8_disks) : 0
+        p2 = get_penalty(d, d + 1, p, p.constraints.min_dist_2_disks)
         if debug && p1 + p2 > 0
             println("Applying penalty of $(p1 + p2)")
         end
@@ -138,7 +135,7 @@ function apply_constraints(p::BoosterParams, x; debug=false)
             penalty += p1 + p2
         end
     end
-    p_length = get_penalty(0, p.n_disk, p, x, p.constraints.max_dist_all_disks,
+    p_length = get_penalty(0, p.n_disk, p, p.constraints.max_dist_all_disks,
                            is_min_dist=false)
     if p_length == Inf
         if debug
@@ -183,7 +180,7 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1}, p::BoosterParams
     p_new.sbdry_init = SeedSetupBoundaries(p.coords, diskno=p.n_disk, distance=dist_new,
                                            epsilon=eps_new)
     apply_optim_res!(p_new, params)
-    if :loss in keys(params)
+    if :air_loss in keys(params) || :disk_loss in keys(params)
         for eps in p_new.sbdry_init.eps[2:end]
             loss = imag(sqrt(eps))
             if loss > 0
@@ -195,6 +192,9 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1}, p::BoosterParams
         if params[:antenna][1] > 0.5
             penalty += (params[:antenna][1] - 0.5)^2
         end
+    end
+    if :spacings in keys(params)
+        penalty += disable_constraints ? 0. : apply_constraints(p_new)
     end
     #if :spacings in keys(params)
     #    for dst in p_new.sbdry_init.distance[1:end-1]
@@ -215,7 +215,7 @@ function calc_boostfactor_cost(dist_shift::AbstractArray{T, 1}, p::BoosterParams
     return cost
 end
 
-function cost_fun(p::BoosterParams, fixed_disk; gradient=false, disable_constraints=false,
+function cost_fun(p::BoosterParams; fixed_disk=0, gradient=false, disable_constraints=false,
                   kwargs...)
     return x -> begin
         penalty = 0.
@@ -253,12 +253,14 @@ function cost_fun_rot(eigendirections, cf)
     end
 end
 
-function optimize_spacings(p::BoosterParams, fixed_disk::Int;
+function optimize_spacings(p::BoosterParams;
+                           fixed_disk=0,
                            starting_point=zeros(p.n_disk),
                            variation=100e-6,
-                           cost_function=cost_fun(p, fixed_disk), n=1024,
+                           cost_function=cost_fun(p; fixed_disk=fixed_disk),
+                           n=64,
                            algorithm=BFGS(linesearch=BackTracking(order=2)),
-                           options=Optim.Options(f_tol=1e-6),
+                           options=Optim.Options(x_tol=1e-6),
                            threshold_cost=-Inf,
                            fixed_variation=nothing)
     best_cost = Atomic{Float64}(Inf)
